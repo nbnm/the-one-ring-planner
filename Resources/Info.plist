@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>The One Ring Planner</string>
+	<key>CFBundleExecutable</key>
+	<string>TheOneRingPlanner</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.t1a.the-one-ring-planner</string>
+	<key>CFBundleName</key>
+	<string>The One Ring Planner</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.22.0</string>
+	<key>CFBundleVersion</key>
+	<string>33</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Capture Inbox thoughts and record your microphone for meetings only when you press Record. Meeting audio is saved locally until you choose to process or remove it.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Record system audio from your Mac for meetings. Only audio is saved locally.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Transcribe explicit Inbox voice captures and saved English or Russian meeting recordings on this Mac.</string>
+</dict>
+</plist>

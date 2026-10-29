@@ -1,0 +1,9 @@
+{
+  "asset": "Sources/RingPlanner/Assets/OneRing.png",
+  "generator": "Built-in image_gen.imagegen tool",
+  "prompt": "A photorealistic product photograph of one plain polished gold wedding ring. Smooth rounded gold band, no engraving and no raised decoration. Three-quarter view, ring standing at a gentle diagonal so the inside and outside are visible, realistic thickness, rich cinematic golden reflections with soft bronze shadows. Centered on a transparent background, transparent center, square canvas, full object with comfortable margins. No hands, no skin, no people, no chain, no gemstones, no text, no environment.",
+  "transparent_background": true,
+  "generation_id": "exec-9f471d5a-53a1-4e49-8c7e-3f287a4af21c",
+  "created_date": "2026-10-20",
+  "use": "In-app branding and packaged macOS app icon"
+}
