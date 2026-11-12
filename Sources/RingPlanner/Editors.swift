@@ -117,10 +117,10 @@ struct ReviewView: View {
                 reviewStep("02", title: "Inbox", detail: "\(store.inbox.count) tasks to review")
                 Button("Prioritize inbox →") { store.page = .matrix }.buttonStyle(.plain).foregroundStyle(Theme.gold)
                 DividerLine()
-                Text("03   Tomorrow").font(Theme.body(15, weight: .semibold))
+                reviewStep("03", title: "Next workday", detail: store.dayTitle(store.nextPlanningDay))
                 HStack(spacing: 14) {
-                    Button("Prepare tomorrow’s draft") { store.chooseTasks(for: store.calendar.date(byAdding: .day, value: 1, to: store.now) ?? store.now) }.buttonStyle(GoldButton())
-                    Button("Choose outcomes") { store.selectedDay = store.calendar.date(byAdding: .day, value: 1, to: store.now) ?? store.now; store.page = .matrix }.buttonStyle(QuietButton())
+                    Button("Prepare next workday’s draft") { store.chooseTasks(for: store.nextPlanningDay) }.buttonStyle(GoldButton())
+                    Button("Choose outcomes") { store.selectedDay = store.nextPlanningDay; store.page = .matrix }.buttonStyle(QuietButton())
                 }
             }.padding(36).frame(maxWidth: 840, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -148,6 +148,9 @@ struct PreferencesView: View {
                     Stepper("Focus block: \(settings.focusMinutes) minutes", value: $settings.focusMinutes, in: 25...90, step: 5)
                     Stepper("Default minimum block: \(settings.minimumFocusMinutes) minutes", value: $settings.minimumFocusMinutes, in: 5...50, step: 5)
                     DetailNote("Transition rules", "Transitions: related tasks 5m · project changes 10m · meeting preparation 5m · recovery 10m. Shared gaps are counted once.")
+                }
+                Section("Completion") {
+                    Toggle("Play a soft chime", isOn: Binding(get: { store.completionSoundEnabled }, set: { store.completionSoundEnabled = $0 }))
                 }
                 Section("Capture") {
                     LabeledContent("Quick capture shortcut", value: "Control + Option + Space")

@@ -2,6 +2,7 @@ import SwiftUI
 import Speech
 import AVFoundation
 import OSLog
+import RingAudioSupport
 
 @MainActor final class SpeechCapture: ObservableObject {
     static var microphoneReservedForMeeting = false
@@ -12,14 +13,13 @@ import OSLog
     @Published var transcript = ""
     @Published var message: String?
     var isBusy: Bool { isStarting || recording || isFinishing }
-    private let engine = AVAudioEngine()
+    private let microphone = RPAudioInput()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var recognizer: SFSpeechRecognizer?
     private var recognition: SFSpeechRecognitionTask?
     private var stream: (any SpeechStreaming)?
     private var timeout: Task<Void, Never>?
     private var finalization: Task<Void, Never>?
-    private var hasTap = false
     private var sessionID: UUID?
     private var onTranscript: ((String) -> Void)?
     private var onFinished: ((String) -> Void)?
@@ -57,6 +57,9 @@ import OSLog
             stop(); return
         }
         transcript = ""; self.onTranscript = onTranscript; self.onFinished = onFinished
+        microphone.onFailure = { [weak self] error in
+            Task { @MainActor in self?.fail(error, session: id) }
+        }
         do {
             if #available(macOS 26.0, *), SpeechTranscriber.isAvailable {
                 // SpeechAnalyzer runs locally and does not require Siri/Dictation to be enabled.
@@ -165,16 +168,10 @@ import OSLog
     }
 
     private func startMicrophone(append: @escaping (AVAudioPCMBuffer) -> Void) throws {
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.channelCount > 0 && format.sampleRate > 0 else { throw VoiceCaptureError.noInput }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in append(buffer) }
-        hasTap = true
-        engine.prepare(); try engine.start()
+        try microphone.start(withBufferSize: 1024) { buffer, _ in append(buffer) }
     }
     private func stopMicrophone() {
-        engine.stop()
-        if hasTap { engine.inputNode.removeTap(onBus: 0); hasTap = false }
+        microphone.stop()
     }
     private func startLegacy(locale: String, session id: UUID) throws {
         guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)), recognizer.isAvailable,

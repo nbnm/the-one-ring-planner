@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import ScreenCaptureKit
 import RingCore
+import RingAudioSupport
 
 @MainActor final class MeetingRecorder: NSObject, ObservableObject, SCContentSharingPickerObserver, SCStreamDelegate {
     enum Phase { case idle, preparing, recording, stopping }
@@ -16,7 +17,7 @@ import RingCore
     var onInterruption: ((Error) -> Void)?
     private var stream: SCStream?
     private var systemAudio: MeetingSystemAudioCapture?
-    private var engine: AVAudioEngine?
+    private var microphone: RPAudioInput?
     private var sink: MeetingAudioSink?
     private var pickerReply: CheckedContinuation<SCContentFilter, Error>?
     private var timer: Task<Void, Never>?
@@ -78,7 +79,7 @@ import RingCore
                 status = "Starting system audio…"
                 let capture = MeetingSystemAudioCapture(); systemAudio = capture
                 try capture.start(sink: sink); try check(id)
-                if source.includesMicrophone { try startMicrophone(sink) }
+                if source.includesMicrophone { try startMicrophone(sink, session: id) }
             } else if let filter {
                 let config = SCStreamConfiguration()
                 config.width = 2; config.height = 2; config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
@@ -94,8 +95,8 @@ import RingCore
                 try stream.addStreamOutput(sink, type: .audio, sampleHandlerQueue: sink.queue)
                 try await stream.startCapture()
                 try check(id)
-                if source.includesMicrophone { try startMicrophone(sink) }
-            } else { try startMicrophone(sink) }
+                if source.includesMicrophone { try startMicrophone(sink, session: id) }
+            } else { try startMicrophone(sink, session: id) }
             try check(id)
             phase = .recording; status = example ? "Example audio · no microphone or call is being captured" : "Recording audio locally"
             startedAt = Date()
@@ -105,6 +106,9 @@ import RingCore
                     try? await Task.sleep(for: .milliseconds(500))
                     guard !Task.isCancelled, let self, self.generation == id else { return }
                     self.elapsed = Date().timeIntervalSince(self.startedAt ?? Date()); ticks += 1
+                    if !example && source.includesMicrophone && self.elapsed >= 8 && !self.microphoneHeard {
+                        self.onInterruption?(MeetingError.validation("No microphone audio arrived. Captured system audio is saved. Check your input device in System Settings → Sound, then try again.")); return
+                    }
                     if self.elapsed >= 4 * 3600 { self.onInterruption?(MeetingError.validation("The four-hour recording limit was reached. Saved audio is ready for processing.")); return }
                     if ticks % 20 == 0 {
                         if let available = try? folder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage, available < 100 * 1024 * 1024 {
@@ -122,7 +126,7 @@ import RingCore
         phase = .stopping; status = "Saving recording…"; generation = UUID()
         timer?.cancel(); timer = nil; exampleTask?.cancel(); await exampleTask?.value; exampleTask = nil
         cancelPicker()
-        if let engine { engine.inputNode.removeTap(onBus: 0); engine.stop() }; engine = nil
+        microphone?.stop(); microphone = nil
         if let stream { try? await stream.stopCapture() }; stream = nil
         systemAudio?.stop(); systemAudio = nil
         let result = await sink?.finish() ?? MeetingAudioStatistics()
@@ -132,14 +136,15 @@ import RingCore
         return result
     }
     func cancelPreparation() { generation = UUID(); cancelPicker() }
-    private func startMicrophone(_ sink: MeetingAudioSink) throws {
-        let engine = AVAudioEngine()
-        let input = engine.inputNode, format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0 && format.channelCount > 0 else { throw VoiceCaptureError.noInput }
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, time in
+    private func startMicrophone(_ sink: MeetingAudioSink, session id: UUID) throws {
+        let capture = RPAudioInput()
+        capture.onFailure = { [weak self] error in
+            Task { @MainActor in guard let self, self.generation == id else { return }; self.onInterruption?(error) }
+        }
+        try capture.start(withBufferSize: 4096) { buffer, time in
             sink.microphone(buffer, at: AVAudioTime.seconds(forHostTime: time.hostTime))
         }
-        self.engine = engine; engine.prepare(); try engine.start()
+        microphone = capture
     }
     private func check(_ id: UUID) throws { try Task.checkCancellation(); if generation != id { throw CancellationError() } }
     private func chooseApplication() async throws -> SCContentFilter {

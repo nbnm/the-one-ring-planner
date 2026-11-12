@@ -2,9 +2,9 @@
 
 **A little less chaos. A little more second breakfast.**
 
-A native macOS planner that brings tasks, routines, Google Calendar and meeting notes into one quiet workspace. Built with Swift, SwiftUI and AppKit, with no third-party package dependencies.
+A native macOS planner that brings tasks, routines, Google Calendar and meeting notes into one quiet workspace. Built with Swift, SwiftUI and AppKit, plus a small Objective-C audio bridge, with no third-party package dependencies.
 
-**Current version:** 0.22.0 · Personal desktop application · macOS 14+
+**Current version:** 0.23.2 · Personal desktop application · macOS 14+
 
 ![Today’s plan with fictional Hobbit tasks and an Inbox](docs/screenshots/today.jpg)
 
@@ -13,12 +13,14 @@ All screenshots use an isolated, fictional Middle-earth workspace. No personal t
 ## What it does
 
 - **Capture and prioritize:** text or voice capture, editable AI cleanup, project tags, and a four-quadrant matrix. Drag tasks between quadrants, change priorities, or expand a quadrant to focus.
-- **Plan a realistic day:** work hours, lunch, meetings, routines, transitions, focus blocks and reserve all count toward capacity. Choose tomorrow’s tasks before confirming the plan.
+- **Plan a realistic day:** work hours, lunch, meetings, routines, transitions, focus blocks and reserve all count toward capacity. Daily review prepares the next working day, skipping weekends: Friday plans target Monday. Choose its tasks before confirming the plan.
 - **Find time in Google Calendar:** Q2 suggests an available slot; accept it or choose another on the calendar. Drag or resize scheduled tasks and routines, with changes synced to Google. Tasks are red; routines are green.
 - **Build routines:** daily, weekdays, weekends or selected days, with flexible/protected placement and small completion celebrations.
 - **Record with The Eye:** system audio, microphone or both; English/Russian transcription, speaker aliases, topics, timecodes and reviewed task extraction. Your “Me” speaker lane stays pink.
 - **Keep the history:** complete a task from any quadrant, inspect past work, restore tasks, and re-transcribe meetings with another model while retaining older transcript versions.
 - **Stay nearby:** a colored ring in the menu bar, recording controls, global capture shortcuts and optional alerts one minute before events.
+
+In **Today**, click a task’s circle to complete the whole task. Completed tasks appear below the schedule, with an option to mark them incomplete and return them to their priority quadrant. **Task actions → Move to backlog** removes unfinished work from saved schedules while keeping its priority, estimate and details. Completion shows a brief gold check animation with Undo and a soft chime; turn the sound off in **Settings → Completion**. Reduce Motion is respected, and the chime stays quiet during meeting or Inbox recording. Published Google changes still require plan confirmation.
 
 ## A quick tour
 
@@ -184,9 +186,10 @@ Keys and Google tokens stay in macOS Keychain and are not part of a file backup.
 ## Development and verification
 
 ```sh
-./scripts/test.sh                   # 151 deterministic core checks
+./scripts/test.sh                   # 157 deterministic core checks
 ./scripts/test-voice.sh             # controlled voice lifecycle checks
 ./scripts/test-meetings.sh          # 45 generated-audio/playback/capture checks
+./scripts/test-audio-input.sh       # 11 native-format, route-recovery and exception-safety checks
 swift build                        # compile the native app
 ```
 
@@ -196,6 +199,7 @@ Optional `./scripts/test-speech-integration.sh` and `./scripts/test-meetings.sh 
 | --- | --- |
 | `Sources/RingCore` | Scheduling, models, persistence, Google API and AI contracts |
 | `Sources/RingPlanner` | Native UI, capture, playback, app/menu bar lifecycle |
+| `Sources/RingAudioSupport` | Hardware microphone format and native audio exception handling |
 | `Tests` | Dependency-free checks and generated audio fixtures |
 | `scripts` | App packaging, local signing and verification |
 | `docs` | Screenshots, implementation notes and detailed feature reference |

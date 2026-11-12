@@ -7,7 +7,8 @@ let package = Package(
     products: [.executable(name: "TheOneRingPlanner", targets: ["RingPlanner"])],
     targets: [
         .target(name: "RingCore"),
-        .executableTarget(name: "RingPlanner", dependencies: ["RingCore"], resources: [.process("Assets")]),
+        .target(name: "RingAudioSupport"),
+        .executableTarget(name: "RingPlanner", dependencies: ["RingCore", "RingAudioSupport"], resources: [.process("Assets")]),
         .executableTarget(name: "RingCoreChecks", dependencies: ["RingCore"], path: "Tests/RingCoreTests")
     ]
 )

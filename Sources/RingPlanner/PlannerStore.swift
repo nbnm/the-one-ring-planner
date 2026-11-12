@@ -23,6 +23,8 @@ import Combine
     @Published var notice: String?
     @Published var savedAt: Date?
     @Published var celebration: Routine?
+    @Published var taskCelebration: TaskCompletionFeedback?
+    private let completionSound = TaskCompletionSound()
     @Published var inboxDraft = ""
     @Published var buildingPlan = false
     @Published var publishingCalendar = false
@@ -148,6 +150,7 @@ import Combine
         }
     }
     var calendar: Calendar { PlannerDate.calendar(settings) }
+    var nextPlanningDay: Date { PlannerDate.nextWorkingDay(after: now, settings: settings) }
     var dayKey: String { PlannerDate.key(selectedDay, settings: settings) }
     var plan: DayPlan? { plans.first { $0.id == dayKey } }
     var displayPlan: DayPlan? { CalendarSchedule.plan(on: selectedDay, plans: plans, settings: settings, now: now, forDisplay: true) }
@@ -155,6 +158,11 @@ import Combine
     var todayPlan: DayPlan? { CalendarSchedule.plan(on: now, plans: plans, settings: settings, now: now, forDisplay: true) }
     var inbox: [PlannerTask] { tasks.filter { $0.state == .inbox }.sorted { $0.createdAt < $1.createdAt } }
     var activeTasks: [PlannerTask] { tasks.filter { $0.state != .done && $0.state != .archived && $0.state != .inbox } }
+    var completionSoundEnabled: Bool {
+        get { publicationDefaults.object(forKey: "task.completionSoundEnabled") as? Bool ?? true }
+        set { objectWillChange.send(); publicationDefaults.set(newValue, forKey: "task.completionSoundEnabled") }
+    }
+    var completedDayTasks: [TaskCompletion] { TaskHistory.completed(on: selectedDay, tasks: tasks, completions: completions, settings: settings) }
     var knownTags: [String] { TaskTags.all(in: tasks) }
     var planningCandidates: [PlannerTask] {
         tasks.filter { $0.isEligible && $0.quadrant != .reconsider && TaskTriage.missingRequirements($0).isEmpty }
@@ -278,37 +286,48 @@ import Combine
         }
     }
     @discardableResult func changeTask(_ draft: PlannerTask, to disposition: TaskDisposition) -> Bool {
+        if (disposition == .complete || disposition == .backlog) && (publishingCalendar || calendarEditSending) {
+            error = "Wait for the calendar update to finish, then try again."; return false
+        }
         guard let current = tasks.first(where: { $0.id == draft.id }), current.revision == draft.revision else {
             error = "This task changed. Close its details and open the latest version."; return false
         }
         if disposition == .complete && current.state == .done { return true }
         if disposition == .inbox && current.completionID != nil && (current.state == .done || current.state == .archived) { return reopenTask(draft) }
+        if disposition == .backlog && current.completionID != nil && (current.state == .done || current.state == .archived) { return reopenTask(draft, to: .ready) }
         var task = disposition == .delete ? current : draft
         if disposition == .complete { task.state = current.state; task.completedAt = current.completedAt; task.completionID = current.completionID }
         task.tags = TaskTags.normalize(task.tags, known: knownTags)
         do {
             let captures: [Capture] = disposition == .delete ? try repository?.load(Capture.self, directory: "captures") ?? [] : []
             let change = TaskLifecycle.change(task, to: disposition, plans: plans, captures: captures, now: isDemo ? now : Date())
-            let changedPlans = disposition == .complete ? change.plans.map { Scheduler().refreshingLayout($0, settings: settings) } : change.plans
-            let message = disposition == .complete ? "Complete task and save history" : disposition == .delete ? "Delete task" : disposition == .archive ? "Archive task" : "Move task to Inbox"
+            let changedPlans = disposition == .complete || disposition == .backlog ? change.plans.map { Scheduler().refreshingLayout($0, settings: settings) } : change.plans
+            let message = disposition == .complete ? "Complete task and save history" : disposition == .delete ? "Delete task" : disposition == .archive ? "Archive task" : disposition == .backlog ? "Return task to backlog" : "Move task to Inbox"
+            let cancelledEdits = (disposition == .complete || disposition == .backlog) ? cancelledTaskCalendarEdits(task.id) : []
             return persist(message: message, tasks: change.task.map { [$0] } ?? [], captures: change.captures,
-                           completions: change.completions, plans: changedPlans, deletingTaskIDs: change.deletingTaskIDs) {
+                           completions: change.completions, calendarEdits: cancelledEdits, plans: changedPlans, deletingTaskIDs: change.deletingTaskIDs) {
                 self.taskDrag = nil
                 if let task = change.task { self.applyTasks([task]) }
                 else { self.tasks.removeAll { $0.id == current.id } }
                 for plan in changedPlans { self.applyPlan(plan) }
-                self.showNotice(disposition == .complete ? "Completed · saved in History" : disposition == .delete ? "Task deleted" : disposition == .archive ? "Task archived" : "Moved to Inbox")
+                self.calendarGridRevision = UUID()
+                self.showNotice(disposition == .complete ? "Completed · saved in History" : disposition == .delete ? "Task deleted" : disposition == .archive ? "Task archived" : disposition == .backlog ? "Back in backlog · priority kept" : "Moved to Inbox")
+                if (disposition == .complete || disposition == .backlog) && changedPlans.contains(where: { $0.publication != nil }) {
+                    self.showNotice(disposition == .complete ? "Completed · confirm plan to update Google Calendar" : "Back in backlog · confirm plan to update Google Calendar")
+                }
+                if disposition == .complete, let entry = change.completions.first { self.celebrateCompletion(entry) }
             }
         } catch { self.error = error.localizedDescription; return false }
     }
     func archive(_ task: PlannerTask) { _ = changeTask(task, to: .archive) }
     @discardableResult func completeTask(_ task: PlannerTask) -> Bool { changeTask(task, to: .complete) }
+    @discardableResult func returnToBacklog(_ task: PlannerTask) -> Bool { changeTask(task, to: .backlog) }
     private func reopenTask(_ draft: PlannerTask, to state: TaskState = .inbox) -> Bool {
         guard let current = tasks.first(where: { $0.id == draft.id }), current.revision == draft.revision,
               let entry = completions.first(where: { $0.id == current.completionID }) else { error = "Open History to restore this task’s latest completion."; return false }
         do {
             var base = draft; base.state = current.state; base.completionID = current.completionID
-            var restoration = try TaskHistory.restore(entry, current: base, completions: completions, now: isDemo ? now : Date())
+            var restoration = try TaskHistory.restore(entry, current: base, completions: completions, now: isDemo ? now : Date(), destination: state == .inbox ? .inbox : .backlog)
             if state != .inbox {
                 restoration.task.state = state; restoration.task.importance = draft.importance; restoration.task.urgency = draft.urgency
                 if let effort = draft.remainingMinutes, effort > 0 { restoration.task.remainingMinutes = effort }
@@ -318,19 +337,30 @@ import Combine
             }
         } catch { self.error = error.localizedDescription; return false }
     }
-    @discardableResult func restoreCompletion(_ snapshot: TaskCompletion) -> Bool {
+    @discardableResult func restoreCompletion(_ snapshot: TaskCompletion, destination: TaskRestorationDestination = .inbox) -> Bool {
+        guard !publishingCalendar && !calendarEditSending else { error = "Wait for the calendar update to finish, then try again."; return false }
         guard let entry = completions.first(where: { $0.id == snapshot.id }), entry == snapshot else { error = "This history entry changed. Open it again."; return false }
         do {
-            let restoration = try TaskHistory.restore(entry, current: tasks.first { $0.id == entry.taskID }, completions: completions, now: isDemo ? now : Date())
+            let restoration = try TaskHistory.restore(entry, current: tasks.first { $0.id == entry.taskID }, completions: completions, now: isDemo ? now : Date(), destination: destination)
             var captures: [Capture] = []
             if let source = restoration.task.sourceCaptureID, var capture = try repository?.load(Capture.self, directory: "captures").first(where: { $0.id == source }), !capture.taskIDs.contains(restoration.task.id) {
                 capture.taskIDs.append(restoration.task.id); captures = [capture]
             }
             return persist(message: "Restore task from completion history", tasks: [restoration.task], captures: captures, completions: [restoration.completion]) {
                 if self.tasks.contains(where: { $0.id == restoration.task.id }) { self.applyTasks([restoration.task]) } else { self.tasks.append(restoration.task) }
-                self.showNotice("Restored to Inbox · completion history kept")
+                self.showNotice(destination == .backlog ? "Back in backlog · priority and history kept" : "Restored to Inbox · completion history kept")
+                if self.taskCelebration?.completion.id == entry.id { self.taskCelebration = nil }
             }
         } catch { self.error = error.localizedDescription; return false }
+    }
+    private func celebrateCompletion(_ entry: TaskCompletion) {
+        taskCelebration = TaskCompletionFeedback(completion: entry)
+        if completionSoundEnabled && meetings.activeID == nil && !meetings.finishing && !inboxSpeech.isBusy { completionSound.play() }
+    }
+    private func cancelledTaskCalendarEdits(_ taskID: String) -> [CalendarBlockEdit] {
+        calendarEdits.filter { $0.unresolved && $0.event.taskID == taskID }.map { original in
+            var edit = original; edit.state = .cancelled; edit.lastError = nil; edit.nextAttemptAt = nil; return edit
+        }
     }
     @discardableResult func saveRoutine(_ draft: Routine) -> Bool {
         var routine = draft
@@ -425,6 +455,7 @@ import Combine
         _ = persist(message: "Start work block", tasks: changed, plan: p) { self.applyPlan(p); self.applyTasks(changed) }
     }
     func complete(_ block: PlanBlock) {
+        guard !publishingCalendar && !calendarEditSending else { error = "Wait for the calendar update to finish, then try again."; return }
         finish(block, completed: true, remaining: nil, note: nil)
     }
     func pause(_ block: PlanBlock, remaining: Int, note: String) {
@@ -444,8 +475,9 @@ import Combine
                 let change = TaskLifecycle.change(t, to: .complete, plans: allPlans, now: isDemo ? now : Date(), completedBlockID: block.id)
                 var affected = change.plans; if !affected.contains(where: { $0.id == p.id }) { affected.append(p) }
                 affected = affected.map { Scheduler().refreshingLayout($0, settings: settings) }
-                _ = persist(message: "Complete task block and save history", tasks: change.task.map { [$0] } ?? [], completions: change.completions, plans: affected) {
+                _ = persist(message: "Complete task block and save history", tasks: change.task.map { [$0] } ?? [], completions: change.completions, calendarEdits: cancelledTaskCalendarEdits(t.id), plans: affected) {
                     self.applyTasks(change.task.map { [$0] } ?? []); self.showNotice("Task completed · saved in History")
+                    if let entry = change.completions.first { self.celebrateCompletion(entry) }
                 }
                 return
             }

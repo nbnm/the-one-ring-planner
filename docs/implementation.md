@@ -351,3 +351,38 @@ The source repository now uses `main` and an `origin` remote at `https://github.
 The README is now an installation and usage guide, with five native app screenshots from an isolated `--demo --middle-earth-demo` workspace. `MiddleEarthDemo.swift` provides fictional Fellowship tasks, four Shire routines, a week of proportional calendar blocks, and a bilingual Council of Elrond transcript with explicitly assigned Frodo/Me and Samwise aliases. The fixture is only applied inside demo mode; it uses generated test tones and never reads the regular task/meeting folders. Earlier detailed behavior documentation is retained in `docs/feature-reference.md`.
 
 The install option refuses to replace a running planner instead of terminating processes. A recording or processing operation must be finished and the app quit before installation. Validation includes 151 core checks, six voice lifecycle checks, 45 generated-audio/playback/capture checks, a signed release build, native visual review of all five screenshots, local documentation-link validation and staged-file credential/data checks. No real meeting was uploaded or played and no real task/calendar was used for the screenshots.
+
+
+## Today task completion and backlog · 0.23.0 · 2026-11-03
+
+Today task markers now complete the whole task through the same transactional lifecycle as matrix completion. The task leaves unfinished schedules and remains in History. A Completed section uses the actual completion date in the planning time zone, including 25-hour DST days; checking a completed entry again restores its prior remaining effort and priority to the unscheduled backlog. A transient Undo action does the same. Older History actions retain their existing Restore to Inbox behavior.
+
+The task action menu adds Move to backlog, preserving classification, tags, notes, source capture and remaining effort. Unstarted planned/pinned blocks are removed across saved plans; running work closes as interrupted with elapsed time and prior completion blocks stay intact. Published plans require reconfirmation to update Google; changes are surfaced in the status bar. Unsent task calendar moves are cancelled in the same transaction, and task actions wait for an in-flight calendar write to finish.
+
+Task completion emits a nonmodal gold ring/check with a brief particle accent, plus an original 0.8-second in-memory three-note PCM chime. The view respects Reduce Motion and includes Undo/dismiss; Settings can mute the chime. Successful task persistence triggers the feedback once, including when a final split block completes the task. Sound is suppressed during meeting or Inbox recording. Routine completion retains its existing celebration.
+
+Validation: 155 core checks, including four new checks for backlog cleanup, restoration of all quadrants, local-date/DST filtering and repository restart. Native isolated Hobbit fixtures verify whole-task completion, the Completed section, restoration with priority/effort retained, repeated Undo cycles, unscheduling an unfinished Q2 task and the sound toggle. The generated chime is also decoded by AVAudioPlayer to verify its duration, mono format and 44.1 kHz sample rate. No real task, recording or Google event is used for these checks.
+
+Installed 0.23.0 build 34 with the existing pinned signing identity after a graceful quit and backup of 0.22.0. Debug and optimized core runners both pass all 155 checks; strict installed signature verification passes. The installed Today view exposes the task checkboxes and action menus. All 56 pre-existing task, routine, completion and meeting metadata files retain their original checksums after installation and launch. No real task was completed, restored or unscheduled during verification.
+
+
+## 0.23.1 · Next working day planning
+
+Daily review uses one shared `PlannerDate.nextWorkingDay` calculation for Prepare draft and Choose outcomes. It selects the next Monday–Friday date in the planning time zone, starting at local midnight: Friday, Saturday and Sunday target Monday. The section shows “Next workday” and the actual target date. Explicit day/calendar navigation and routine repeat days stay available independently. Public holidays are not inferred.
+
+Validation: 157 core checks pass, including coverage of every weekday, month/year boundaries, Toronto/UTC and Tokyo date differences, and both daylight-saving transitions.
+
+Signed release 0.23.1 build 35 was installed after checking idle recording/processing and gracefully quitting. Native UI verification on Friday, November 6 showed “Next workday · Monday, November 9”; Prepare draft opened Monday’s task chooser. The preview was cancelled without saving or confirming a plan. The prior 0.23.0 bundle is preserved under `build/backups`.
+
+
+## 0.23.2 · Recoverable microphone startup
+
+Two November 10 recording attempts crashed after startup remained at “Starting system audio”. Unified logs showed AVFAudio throwing an Objective-C exception: hardware input was 16 kHz mono while the cached client output format requested 44.1 kHz. System audio had started and was saved, but the exception unwound the Swift capture task, leaving controls stuck; a later SwiftUI interaction crashed in executor validation. A brief local reproduction confirmed the same failure.
+
+`RingAudioSupport/RPAudioInput` installs the microphone tap using its hardware input format and contains native AVAudioEngine exceptions in Objective-C, returning an NSError to Swift. Failed starts release the engine/tap, so MeetingRecorder's normal error path stops the system tap and flushes partial audio. Startup failures retain captured elapsed duration. Inbox speech shares the protected input implementation. No sample-rate, input-device or privacy settings are changed.
+
+Validation: 11 new offline Objective-C checks cover the 16/44.1 kHz mismatch, duplicate start, idempotent stop, native tap/preparation exceptions, ordinary engine errors, absent format and cleanup exceptions. All 45 generated-audio/capture/playback checks, 6 voice lifecycle checks and 157 core checks pass.
+
+Live testing of build 36 then exposed an immediate AVAudioEngineConfigurationChange that stopped microphone delivery without an error. Build 37 adds debounced route recovery using the same engine and the newly negotiated hardware format, bounded retries, cancellation of pending recovery on Stop, and recoverable failure callbacks for both meeting and Inbox capture. An eight-second first-packet watchdog stops and preserves partial meetings if microphone frames never arrive. The new offline checks cover route recovery, Stop during queued recovery and failed recovery.
+
+Final signed build 37 was installed with the existing pinned signing identity after an idle, graceful quit. A real menu-initiated 26-second local capture showed both “Microphone · receiving audio” and “System audio · receiving audio”, then Stop & save returned a Recorded item without an error. Both microphone.caf and call.caf were saved with nonzero audio. No recordings were played or uploaded for transcription. Three diagnostic clips were moved to recoverable Trash through the app; the user's 15 existing meeting records remain. All 69 pre-existing task/routine/completion/meeting metadata files matched their saved hashes after the update and cleanup. Previous installed builds and diagnostic logs remain local under ignored build folders or /tmp.

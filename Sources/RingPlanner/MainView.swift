@@ -4,6 +4,7 @@ import RingCore
 
 struct MainView: View {
     @EnvironmentObject var store: PlannerStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var quadrantExpanded: Bool { store.page == .matrix && store.expandedQuadrant != nil }
     var body: some View {
         VStack(spacing: 0) {
@@ -43,6 +44,12 @@ struct MainView: View {
         }
         .overlay { if let drag = store.taskDrag { TaskDragPreview(drag: drag) } }
         .overlay { if let routine = store.celebration { RoutineCelebration(kind: routine.kind, title: routine.title) { store.celebration = nil } } }
+        .overlay(alignment: .bottom) {
+            if let feedback = store.taskCelebration {
+                TaskCompletionToast(feedback: feedback).id(feedback.id).padding(.bottom, 46).transition(.opacity)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: store.taskCelebration?.id)
         .sheet(item: $store.editingTask) { TaskEditor(task: $0) }
         .sheet(item: $store.priorityReview) { PriorityReviewSheet(request: $0) }
         .sheet(item: $store.captureReview) { CaptureReviewSheet(review: $0) }
@@ -116,7 +123,9 @@ struct TodayView: View {
                             Menu { Toggle("Show transitions", isOn: $showTransitions) } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize().help("Schedule display options").accessibilityLabel("Schedule display options")
                         }
                         VStack(spacing: 0) {
-                            ForEach(visibleBlocks.filter { showTransitions || $0.kind != .transition }) { block in TimelineRow(block: block) }
+                            ForEach(visibleBlocks.filter { block in
+                                (showTransitions || block.kind != .transition) && !store.tasks.contains { $0.id == block.taskID && $0.state == .done }
+                            }) { block in TimelineRow(block: block) }
                         }
                         if !plan.unscheduled.isEmpty {
                             DividerLine()
@@ -127,6 +136,7 @@ struct TodayView: View {
                             }
                         }
                     } else { emptyDay }
+                    TodayCompletedTasks()
                 }.padding(32)
             }
         }
@@ -208,6 +218,7 @@ struct DayInspector: View {
 
 struct TimelineRow: View {
     @EnvironmentObject var store: PlannerStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let block: PlanBlock
     @State private var hovered = false
     @State private var showPause = false
@@ -216,8 +227,16 @@ struct TimelineRow: View {
             Text(store.time(block.start)).font(Theme.body(11, weight: .semibold)).monospacedDigit().foregroundStyle(Theme.secondary).frame(width: 39, alignment: .leading).padding(.top, 15)
             VStack(spacing: 0) {
                 ZStack {
-                    Circle().fill(block.kind == .transition ? Theme.background : color.opacity(0.15)).frame(width: block.kind == .transition ? 7 : 28, height: block.kind == .transition ? 7 : 28)
-                    if block.kind != .transition { Image(systemName: symbol).font(.system(size: 12)).foregroundStyle(color) }
+                    if let task, task.state != .done && task.state != .archived {
+                        Button { markCompleted(task) } label: {
+                            Image(systemName: "circle").font(.system(size: 22, weight: .light)).foregroundStyle(Theme.gold).frame(width: 28, height: 30)
+                        }.buttonStyle(.plain).help("Mark task completed · saved in History")
+                            .accessibilityLabel("Mark \(task.title) completed")
+                            .disabled(store.publishingCalendar || store.calendarEditSending)
+                    } else {
+                        Circle().fill(block.kind == .transition ? Theme.background : color.opacity(0.15)).frame(width: block.kind == .transition ? 7 : 28, height: block.kind == .transition ? 7 : 28)
+                        if block.kind != .transition { Image(systemName: symbol).font(.system(size: 12)).foregroundStyle(color) }
+                    }
                 }.frame(height: block.kind == .transition ? 24 : 30).padding(.top, block.kind == .transition ? 8 : 9)
                 Rectangle().fill(Theme.line).frame(width: 1).frame(maxHeight: .infinity)
             }.frame(width: 28)
@@ -239,12 +258,17 @@ struct TimelineRow: View {
                     if actionable {
                         HStack(spacing: 12) {
                             if block.state == .running {
-                                Button { store.complete(block) } label: { Image(systemName: "checkmark.circle") }.foregroundStyle(Theme.green).help("Complete").accessibilityLabel("Complete \(block.title)")
+                                if task == nil { Button { store.complete(block) } label: { Image(systemName: "checkmark.circle") }.foregroundStyle(Theme.green).help("Complete").accessibilityLabel("Complete \(block.title)") }
                                 Button { showPause = true } label: { Image(systemName: "pause.circle") }.help("Continue later").accessibilityLabel("Pause \(block.title)")
                             } else {
                                 Button { store.start(block) } label: { Image(systemName: "play.fill") }.foregroundStyle(Theme.gold).help("Start").accessibilityLabel("Start \(block.title)")
-                                Button { store.complete(block) } label: { Image(systemName: "checkmark.circle") }.foregroundStyle(Theme.green).help("Complete").accessibilityLabel("Complete \(block.title)")
+                                if task == nil { Button { store.complete(block) } label: { Image(systemName: "checkmark.circle") }.foregroundStyle(Theme.green).help("Complete").accessibilityLabel("Complete \(block.title)") }
                                 Button { store.pin(block) } label: { Image(systemName: block.pinned ? "pin.slash" : "pin") }.help(block.pinned ? "Unpin" : "Pin").accessibilityLabel("\(block.pinned ? "Unpin" : "Pin") \(block.title)")
+                            }
+                            if let task, task.state != .done && task.state != .archived {
+                                Menu { taskActions(task) } label: { Image(systemName: "ellipsis") }
+                                    .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Actions for \(task.title)")
+                                    .disabled(store.publishingCalendar || store.calendarEditSending)
                             }
                         }.buttonStyle(.plain).font(Theme.body(10, weight: .semibold)).padding(.top, 5)
                     }
@@ -252,10 +276,24 @@ struct TimelineRow: View {
             }.foregroundStyle(block.kind == .transition ? Theme.secondary : Theme.text).padding(.vertical, block.kind == .transition ? 12 : 14).frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 8).background(block.state == .running ? Theme.goldFill.opacity(0.5) : (hovered && actionable ? Theme.surface : .clear), in: RoundedRectangle(cornerRadius: 8))
-        .onHover { hovered = $0 }.contextMenu { if actionable { Button("Start") { store.start(block) }; Button("Complete") { store.complete(block) }; Button(block.pinned ? "Unpin" : "Pin") { store.pin(block) } } }
+        .onHover { hovered = $0 }.contextMenu {
+            if let task, task.state != .done && task.state != .archived { taskActions(task) }
+            else if actionable { Button("Start") { store.start(block) }; Button("Complete") { store.complete(block) }; Button(block.pinned ? "Unpin" : "Pin") { store.pin(block) } }
+        }
         .sheet(isPresented: $showPause) { PauseView(block: block) }
         .accessibilityElement(children: .contain)
         .help("\(store.time(block.start))–\(store.time(block.end)) · \(block.minutes) min")
+    }
+    private var task: PlannerTask? { store.tasks.first { $0.id == block.taskID } }
+    private func markCompleted(_ task: PlannerTask) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { _ = store.completeTask(task) }
+    }
+    @ViewBuilder private func taskActions(_ task: PlannerTask) -> some View {
+        Button("Mark completed", systemImage: "checkmark.circle") { markCompleted(task) }
+        if actionable && (task.remainingMinutes ?? 0) > block.minutes { Button("Complete this block", systemImage: "checkmark") { store.complete(block) } }
+        Button("Move to backlog", systemImage: "arrow.uturn.backward") { _ = store.returnToBacklog(task) }
+        Divider()
+        Button("Open task", systemImage: "square.and.pencil") { store.editingTask = task }
     }
     private var actionable: Bool { (block.kind == .focus || block.kind == .routine) && (block.state == .planned || block.state == .running) }
     private var color: Color { block.kind == .meeting ? Theme.secondary : (block.kind == .routine ? Theme.green : Theme.gold) }

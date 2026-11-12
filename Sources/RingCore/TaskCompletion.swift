@@ -19,6 +19,7 @@ public struct TaskRestoration {
     public var task: PlannerTask
     public var completion: TaskCompletion
 }
+public enum TaskRestorationDestination { case inbox, backlog }
 public enum TaskHistoryError: LocalizedError {
     case alreadyActive, changed
     public var errorDescription: String? {
@@ -35,7 +36,7 @@ public enum TaskHistory {
             return $0.recordedAt == $1.recordedAt ? $0.id < $1.id : $0.recordedAt < $1.recordedAt
         }
     }
-    public static func restore(_ completion: TaskCompletion, current: PlannerTask?, completions: [TaskCompletion], now: Date) throws -> TaskRestoration {
+    public static func restore(_ completion: TaskCompletion, current: PlannerTask?, completions: [TaskCompletion], now: Date, destination: TaskRestorationDestination = .inbox) throws -> TaskRestoration {
         guard completion.restoredAt == nil else { throw TaskHistoryError.alreadyActive }
         guard latest(taskID: completion.taskID, completions: completions)?.id == completion.id else { throw TaskHistoryError.changed }
         if let current {
@@ -44,13 +45,27 @@ public enum TaskHistory {
             guard current.completionID == completion.id else { throw TaskHistoryError.changed }
         }
         var task = current ?? completion.taskSnapshot
-        task.state = .inbox; task.importance = nil; task.urgency = nil; task.completedAt = nil; task.completionID = nil
+        if destination == .inbox { task.importance = nil; task.urgency = nil }
+        task.state = destination == .backlog && task.quadrant != nil ? .ready : .inbox
+        task.completedAt = nil; task.completionID = nil
         let previous = completion.taskSnapshot.remainingMinutes ?? 0
         task.remainingMinutes = previous > 0 ? previous : max(25, task.minimumBlockMinutes)
         task.minimumBlockMinutes = max(5, min(task.minimumBlockMinutes, task.remainingMinutes!))
         task.schemaVersion = 3; task.updatedAt = now; task.revision += 1
         var entry = completion; entry.restoredAt = now
         return TaskRestoration(task: task, completion: entry)
+    }
+    /// Today uses the real completion date, not the date on which work was scheduled.
+    public static func completed(on day: Date, tasks: [PlannerTask], completions: [TaskCompletion], settings: PlanningSettings) -> [TaskCompletion] {
+        let calendar = PlannerDate.calendar(settings)
+        let start = calendar.startOfDay(for: day)
+        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return [] }
+        let current = Dictionary(tasks.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        return completions.filter { entry in
+            guard let date = entry.completedAt, start <= date, date < end, entry.restoredAt == nil,
+                  let task = current[entry.taskID], task.state == .done, task.completionID == entry.id else { return false }
+            return true
+        }.sorted { $0.completedAt == $1.completedAt ? $0.id < $1.id : $0.completedAt! > $1.completedAt! }
     }
     /// Older releases did not save completion times. Retain those tasks without inventing dates.
     public static func migratingLegacy(tasks: [PlannerTask], completions: [TaskCompletion], now: Date) -> (tasks: [PlannerTask], completions: [TaskCompletion]) {

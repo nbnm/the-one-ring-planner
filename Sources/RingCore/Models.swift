@@ -214,6 +214,13 @@ public enum PlannerDate {
     public static func key(_ date: Date, settings: PlanningSettings) -> String {
         let f = DateFormatter(); f.calendar = calendar(settings); f.timeZone = f.calendar.timeZone; f.dateFormat = "yyyy-MM-dd"; return f.string(from: date)
     }
+    /// The next Monday–Friday date in the planner's time zone, excluding today.
+    public static func nextWorkingDay(after date: Date, settings: PlanningSettings) -> Date {
+        let c = calendar(settings)
+        let weekday = c.component(.weekday, from: date)
+        let days = weekday == 6 ? 3 : (weekday == 7 ? 2 : 1)
+        return c.date(byAdding: .day, value: days, to: c.startOfDay(for: date))!
+    }
     public static func at(_ minute: Int, on day: Date, settings: PlanningSettings) -> Date {
         let c = calendar(settings)
         if minute == 1440 { return c.date(byAdding: .day, value: 1, to: c.startOfDay(for: day)) ?? day }

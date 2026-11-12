@@ -104,6 +104,7 @@ import RingCore
             } catch {
                 guard !finishing else { return }
                 var item = recordings.first { $0.id == record.id } ?? record
+                item.duration = max(item.duration, recorder.elapsed)
                 item.state = .interrupted; item.endedAt = Date(); item.lastError = error is CancellationError ? "Recording cancelled. Any captured audio is preserved." : error.localizedDescription
                 _ = save(item); activeID = nil; SpeechCapture.microphoneReservedForMeeting = false
             }
@@ -119,6 +120,7 @@ import RingCore
             record.duration = max(record.duration, stats.duration); record.endedAt = Date()
             record.state = reason == nil && record.duration > 0 ? .recorded : .interrupted
             record.lastError = reason ?? (record.duration > 0 ? nil : "No audio was captured. Check the selected app and microphone permissions.")
+            if record.source.includesMicrophone && stats.microphoneFrames == 0 && reason == nil { record.lastError = "No microphone audio arrived. Other captured audio is saved. Check your input device in System Settings → Sound, then try again." }
             if record.source.includesCall && stats.callFrames == 0 { record.lastError = record.source.usesSystemAudio ? "No system audio arrived. Your microphone audio, if present, is saved. Check System Audio Recording permission and that sound is playing." : "No call audio arrived. Your microphone audio, if present, is saved. Check the app selected in the macOS picker." }
             _ = save(record)
         }

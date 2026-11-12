@@ -13,6 +13,12 @@ func XCTAssertThrowsError<T>(_ expression: @autoclosure () throws -> T, file: St
 @main enum CoreChecks {
     static func main() async {
         let checks: [(String, () throws -> Void)] = [
+            ("Next workday skips weekends across week, month and year boundaries", { PlanningDateTests().testNextWorkdayForEveryWeekdayAndMonthYearBoundaries() }),
+            ("Next workday respects planning time zone and daylight saving changes", { PlanningDateTests().testNextWorkdayUsesPlanningTimeZoneAndCalendarDaysAcrossDST() }),
+            ("Today backlog removes future work, closes running work and keeps priority", { TodayTaskTests().testBacklogRemovesAllUnstartedWorkAndKeepsPriorityAndHistory() }),
+            ("Mark incomplete restores every quadrant and preserves completion evidence", { try TodayTaskTests().testMarkIncompleteRestoresEffortAndPriorityWithoutLosingCompletion() }),
+            ("Today completions use actual local dates including DST", { try TodayTaskTests().testTodayShowsActualCompletionDayAcrossDSTAndHidesRestoredEntries() }),
+            ("Backlog restoration and original completion survive restart", { try TodayTaskTests().testBacklogRestorationSurvivesRestartWithCompletionEvidence() }),
             ("Fresh transcription reruns the same model and preserves imported evidence", { try MeetingTranscriptVersionTests().testFreshAttemptPreservesActiveTranscriptAndImportedEvidence() }),
             ("Transcript activation and repeated restoration retain aliases and import receipts", { try MeetingTranscriptVersionTests().testModelSwitchActivationAndRepeatedRestoreKeepEvidenceAndReceipts() }),
             ("New transcript checkpoints survive restart while the active version stays ready", { try MeetingTranscriptVersionTests().testDraftRestartRetainsCheckpointsWithoutInterruptingActiveVersion() }),

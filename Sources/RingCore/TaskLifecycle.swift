@@ -1,6 +1,6 @@
 import Foundation
 
-public enum TaskDisposition { case complete, archive, inbox, delete }
+public enum TaskDisposition { case complete, archive, inbox, backlog, delete }
 
 public struct TaskDispositionChange {
     public let task: PlannerTask?
@@ -26,6 +26,7 @@ public enum TaskLifecycle {
         }
         if disposition == .archive { task.state = .archived }
         if disposition == .inbox { task.state = .inbox; task.importance = nil; task.urgency = nil; task.completedAt = nil; task.completionID = nil }
+        if disposition == .backlog { task.state = task.quadrant == nil ? .inbox : .ready; task.completedAt = nil; task.completionID = nil }
         func clean(_ blocks: [PlanBlock], history: Bool = false) -> [PlanBlock] {
             let removed = Set(blocks.filter { $0.taskID == task.id && (deleting || $0.state == .planned) }.map(\.id))
             return blocks.compactMap { block in
