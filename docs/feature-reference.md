@@ -1,3 +1,5 @@
+> Current update: Task microphone recording was removed in 0.25.0. Use text/multi-image capture and automatic AI tagging. Meeting recording in The Eye remains available. Older voice-capture descriptions below document previous versions.
+
 # Feature reference
 
 Detailed behavior and historical release notes. For current installation, setup and screenshots, start with the [README](../README.md).
@@ -198,3 +200,10 @@ Use **Choose on calendar** to reject the proposal and see the week. Click a gap 
 `python3 scripts/test-signing.py` verifies unchanged designated requirements, pinned-certificate checks, and a synthetic Keychain write/read across changed app bundles. `--demo --q2-demo` opens an isolated Q2 review after deliberately browsing two weeks ahead, verifying that search still starts today. 151 core checks pass, including new current-week availability, reserve, stale/missing event and manual-calendar validation checks.
 
 Splittable Q2 tasks can use an earlier useful first block instead of waiting for a later full-duration opening. The suggested duration and remaining unallocated effort are shown explicitly. Turn off **Use an earlier gap for a shorter first block** to require the chosen block length. Task splitting preferences and minimum useful block lengths are respected.
+
+
+## Private Telegram polling
+
+Settings → Telegram connects a dedicated BotFather bot, stores its token in Keychain and pairs one numeric owner through a private one-time command. The Mac app polls getUpdates at a configurable 5–300-second interval (15 by default), retaining a durable local cursor/queue before acknowledging updates. Group/other-user traffic is ignored. Text, links, photos, documents and audio import into shared Inbox with stable replay-safe IDs. Voice notes preserve raw audio, use FFmpeg and the configured LiteLLM alias for Russian/English transcription, checkpoint three-minute chunks and optionally split independent tasks into Inbox suggestions. Failed captures remain retryable; completed sources survive private Git/archive backup.
+
+Read-only /today, /tomorrow, /next, /tasks, /work, /personal, /task, /find, /inbox and /status commands are scoped to the paired owner and use actual local dates. Daily plan digests, new-Q1 notifications and one-minute event alerts are opt-in; alerts require ≤30-second polling. Delivery checkpoints suppress confirmed repeats; ambiguous deliveries wait for explicit retry with a duplicate warning. Polling needs the app running and Mac awake; Telegram's pending update retention is 24 hours. Credentials/owner/cursors stay local; imported originals/transcripts/files enter normal data backup.

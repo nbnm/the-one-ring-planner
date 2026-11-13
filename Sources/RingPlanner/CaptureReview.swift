@@ -5,19 +5,40 @@ import RingCore
     let id = UUID()
     let source: String
     let originalTask: PlannerTask?
+    let files: [URL]
+    let demo: Bool
+    @Published var preparedAttachments: [LibraryPreparedAttachment] = []
+    @Published var assetsReady = false
+    var attachments: [LibraryAttachment] {
+        var all = originalTask?.attachments ?? []
+        for a in preparedAttachments.map(\.attachment) where !all.contains(where: { $0.hash == a.hash }) { all.append(a) }
+        return all
+    }
     @Published var drafts: [CaptureDraft] = []
     @Published var processing = false
     @Published var message: String?
     private var generation: Task<Void, Never>?
-    init(source: String, originalTask: PlannerTask? = nil) { self.source = source; self.originalTask = originalTask }
-    func process(settings: CaptureAISettings, knownTags: [String]) {
+    init(source: String, originalTask: PlannerTask? = nil, files: [URL] = [], demo: Bool = false) { self.source = source; self.originalTask = originalTask; self.files = files; self.demo = demo }
+    func process(settings: CaptureAISettings, knownTags: [String], repository: DataRepository?) {
         guard !processing else { return }
         processing = true; message = nil
         generation = Task { [weak self] in
             guard let self else { return }
             do {
+                guard let repository else { throw LibraryError.invalid("Task storage is unavailable. Your capture is retained.") }
+                let selectedFiles = files
+                let prepared = try await Task.detached { try LibraryMedia.prepare(selectedFiles, repository: repository) }.value
+                guard !Task.isCancelled else { return }
+                var seen = Set<String>()
+                preparedAttachments = prepared.filter { seen.insert($0.attachment.hash).inserted }
+                assetsReady = true
+                if demo {
+                    drafts = [CaptureDraft(title: source.isEmpty ? "Review the Fellowship reference" : String(source.prefix(160)), tags: ["Fellowship"])]; processing = false; return
+                }
+                let imageFiles = selectedFiles + (originalTask?.attachments ?? []).filter(\.isImage).map { repository.root.appendingPathComponent($0.path) }
+                let images = try await Task.detached { try LibraryMedia.aiImages(imageFiles.filter { ["png", "jpg", "jpeg", "heic"].contains($0.pathExtension.lowercased()) }) }.value
                 let key = try await settings.apiKey()
-                let result = try await LiteLLMClient().process(source, knownTags: knownTags, connection: settings.connection, apiKey: key)
+                let result = try await LiteLLMClient().process(source, images: images, knownTags: knownTags, connection: settings.connection, apiKey: key)
                 guard !Task.isCancelled else { return }
                 drafts = result.enumerated().map { index, draft in
                     var draft = draft
@@ -30,7 +51,7 @@ import RingCore
             } catch {
                 guard !Task.isCancelled else { return }
                 message = error.localizedDescription
-                if drafts.isEmpty { drafts = [CaptureDraft()] }
+                if drafts.isEmpty { drafts = [CaptureDraft(title: String(source.prefix(160)))] }
             }
             processing = false
         }
@@ -44,7 +65,7 @@ struct CaptureReviewSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var review: CaptureReview
     private var selected: [CaptureDraft] { review.drafts.filter(\.included) }
-    private var valid: Bool { !review.processing && !selected.isEmpty && selected.allSatisfy { !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.title.trimmingCharacters(in: .whitespacesAndNewlines).count <= 160 } }
+    private var valid: Bool { !review.processing && review.assetsReady && !selected.isEmpty && selected.allSatisfy { !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.title.trimmingCharacters(in: .whitespacesAndNewlines).count <= 160 } }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
@@ -62,11 +83,12 @@ struct CaptureReviewSheet: View {
                         VStack(alignment: .leading, spacing: 10) {
                             Text(message).font(Theme.body(12)).foregroundStyle(Theme.alert).fixedSize(horizontal: false, vertical: true)
                             HStack {
-                                Button("Retry cleanup") { review.process(settings: store.captureAI, knownTags: store.knownTags) }.disabled(review.processing)
+                                Button("Retry cleanup") { review.process(settings: store.captureAI, knownTags: store.knownTags, repository: store.repository) }.disabled(review.processing)
                                 Button("Connection settings") { review.cancel(); dismiss(); store.page = .settings }
                             }.font(Theme.body(11)).buttonStyle(.plain).foregroundStyle(Theme.gold)
                         }
                     }
+                    if !review.files.isEmpty { CaptureAttachmentStrip(files: review.files, remove: { _ in }).disabled(true) }
                     ForEach($review.drafts) { $draft in
                         VStack(alignment: .leading, spacing: 12) {
                             HStack(alignment: .top, spacing: 12) {
@@ -74,7 +96,8 @@ struct CaptureReviewSheet: View {
                                 TextField("Actionable task title", text: $draft.title, axis: .vertical).font(Theme.body(15, weight: .semibold)).lineLimit(1...3).textFieldStyle(.plain).accessibilityLabel("Proposed task title")
                             }
                             TextField("Supporting details (optional)", text: $draft.notes, axis: .vertical).lineLimit(2...5).font(Theme.body(12)).textFieldStyle(.roundedBorder).accessibilityLabel("Task details")
-                            TaskTagEditor(tags: $draft.tags, knownTags: store.knownTags)
+                            TaskAreaPicker(tags: $draft.tags)
+                    TaskTagEditor(tags: $draft.tags, knownTags: store.knownTags)
                             if draft.title.count > 160 { Text("Keep the title under 160 characters; move extra detail to notes.").font(Theme.body(11)).foregroundStyle(Theme.alert) }
                         }.opacity(draft.included ? 1 : 0.5)
                         DividerLine()

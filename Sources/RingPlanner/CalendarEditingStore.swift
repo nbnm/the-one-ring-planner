@@ -52,7 +52,7 @@ extension PlannerStore {
         p.publication = CalendarBlockEditing.recording(desired, in: p.publication!, acknowledged: false)
         var scope = p.publication!; scope.desired = [desired]; scope.known = [desired]; scope.confirmedBlockIDs = [blockID]; scope.observedPlanEvents = [desired]
         let edit = CalendarBlockEdit(publication: scope, baselineStart: event.start, baselineEnd: event.end, creating: !existed)
-        p.revision += 1; p = Scheduler().refreshingLayout(p, settings: settings)
+        p.revision += 1; p = Scheduler().refreshingLayout(p, settings: settings, tasks: tasks)
         // An older imported plan may contain an unstarted copy with a different block ID.
         // Once its authenticated Google occurrence is adopted, retain only that occurrence.
         func removingLegacyCopy(_ plan: DayPlan) -> DayPlan {
@@ -61,7 +61,7 @@ extension PlannerStore {
                 b.id != blockID && b.state == .planned && b.actualStartedAt == nil && b.start == event.start && b.end == event.end &&
                 ((event.taskID != nil && b.taskID == event.taskID && b.routineID == nil) || (event.routineID != nil && b.routineID == event.routineID && b.taskID == nil))
             }
-            if value.blocks != plan.blocks { value.revision += 1; value = Scheduler().refreshingLayout(value, settings: settings) }
+            if value.blocks != plan.blocks { value.revision += 1; value = Scheduler().refreshingLayout(value, settings: settings, tasks: tasks) }
             return value
         }
         let legacyUpdates = existing == nil && event.googleEventID != nil ? plans.filter { $0.id != owner }.compactMap { old -> DayPlan? in let value = removingLegacyCopy(old); return value == old ? nil : value } : []
@@ -75,7 +75,7 @@ extension PlannerStore {
         return true
     }
     func retryCalendarEdits(force: Bool = false) async {
-        guard !publishingCalendar, !calendarEditSending else { return }
+        guard !publicationDefaults.bool(forKey: "workspace.restoreNeedsReview"), !publishingCalendar, !calendarEditSending else { return }
         let pending = calendarEdits.filter { $0.state == .pending && (force || ($0.nextAttemptAt ?? .distantPast) <= Date()) }
         guard !pending.isEmpty else { return }
         publishingCalendar = true; calendarEditSending = true
@@ -127,7 +127,7 @@ extension PlannerStore {
                 guard var p = plans.first(where: { $0.id == edit.publication.day }), let i = p.blocks.firstIndex(where: { $0.id == edit.event.blockID }), p.blocks[i].state == .planned else { throw CalendarPublicationError.invalidPlan }
                 let oldMinutes = p.blocks[i].minutes
                 p.blocks[i].start = time.start; p.blocks[i].end = time.end; p.blocks[i].pinned = true
-                p.revision += 1; p = Scheduler().refreshingLayout(p, settings: settings)
+                p.revision += 1; p = Scheduler().refreshingLayout(p, settings: settings, tasks: tasks)
                 if let pub = p.publication { p.publication = CalendarBlockEditing.recording(edit.event.rescheduled(start: time.start, end: time.end), in: pub, acknowledged: true) }
                 let task = tasks.first { $0.id == edit.event.taskID }.map { CalendarBlockEditing.resizedTask($0, from: oldMinutes, to: Int(time.end.timeIntervalSince(time.start) / 60), now: now) }
                 edit.state = .cancelled

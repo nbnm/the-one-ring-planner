@@ -28,99 +28,43 @@ struct PriorityMenu: View {
 
 struct InboxSidebar: View {
     @EnvironmentObject var store: PlannerStore
-    @State private var tagFilter = TaskTagFilter.all
-    @State private var grouped = false
-    private var groups: [TaskTagGroup] { TaskTagGroup.make(store.inbox, grouped: grouped, filter: tagFilter) }
-    private var visibleCount: Int { groups.reduce(0) { $0 + $1.tasks.count } }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "tray").foregroundStyle(Theme.gold)
-                Text("Inbox").font(Theme.body(14, weight: .semibold))
-                Text("\(store.inbox.count)").font(Theme.body(10, weight: .semibold)).foregroundStyle(Theme.secondary)
+                Button("Inbox") { store.page = .inbox }.buttonStyle(.plain).font(Theme.body(14, weight: .semibold))
+                Text("\(store.inbox.count + store.sharedInbox.active.count)").font(Theme.body(10, weight: .semibold)).foregroundStyle(Theme.secondary)
                     .padding(.horizontal, 7).padding(.vertical, 3).background(Theme.line.opacity(0.5), in: Capsule())
                 Spacer()
                 Button { AppActions.capture() } label: { Image(systemName: "plus").font(.system(size: 14)) }
-                    .buttonStyle(.plain).foregroundStyle(Theme.secondary).help("Open quick capture").accessibilityLabel("Capture a task in Inbox")
+                    .buttonStyle(.plain).foregroundStyle(Theme.secondary).help("Open quick capture").accessibilityLabel("Capture an Inbox item")
             }.padding(.horizontal, 22).frame(height: 64)
             DividerLine()
             VStack(alignment: .leading, spacing: 14) {
-                InboxCaptureField(store: store, speech: store.inboxSpeech)
+                InboxCaptureField(store: store)
             }.padding(20)
-            if !store.inbox.isEmpty {
-                TaskTagControls(tags: store.knownTags, filter: $tagFilter, grouped: $grouped).padding(.horizontal, 20).padding(.bottom, 14)
-            }
             DividerLine().padding(.horizontal, 20)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if store.inbox.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Image(systemName: "tray").font(.system(size: 28, weight: .ultraLight)).foregroundStyle(Theme.gold).padding(.bottom, 5)
-                            Text("Nothing waiting.").font(Theme.display(22))
-                        }.padding(.vertical, 28).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    if !store.inbox.isEmpty && visibleCount == 0 {
-                        Text("No tasks with this tag.").font(Theme.body(12)).foregroundStyle(Theme.secondary).padding(.top, 24)
-                        Button("Show all tasks") { tagFilter = .all }.buttonStyle(.plain).foregroundStyle(Theme.gold).font(Theme.body(11)).padding(.top, 8)
-                    }
-                    ForEach(groups) { group in
-                        TagGroupHeading(group: group)
-                        ForEach(group.tasks) { task in
-                            InboxTaskRow(task: task)
-                            DividerLine()
-                        }
-                    }
-                }.padding(.horizontal, 20)
-            }
-        }.background(Theme.sidebar.opacity(0.46)).accessibilityElement(children: .contain).accessibilityLabel("Inbox sidebar")
+            InboxContents().padding(.horizontal, 20)
+
+        }.background(Theme.surface.opacity(0.46)).accessibilityElement(children: .contain).accessibilityLabel("Inbox sidebar")
     }
 }
 
 private struct InboxCaptureField: View {
     @ObservedObject var store: PlannerStore
-    @ObservedObject var speech: SpeechCapture
-    @FocusState private var focused: Bool
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 8) {
-                TextField("Capture a task…", text: $store.inboxDraft).textFieldStyle(.plain).font(Theme.body(12))
-                    .focused($focused).disabled(speech.isBusy)
-                    .onSubmit { store.saveInboxCapture() }.accessibilityLabel("Quick inbox task")
-                Button { AppActions.recordInbox() } label: {
-                    Image(systemName: speech.isBusy ? "stop.circle.fill" : "mic")
-                        .font(.system(size: 17)).foregroundStyle(speech.isBusy ? Theme.alert : Theme.gold)
-                        .frame(width: 22, height: 24)
-                }.buttonStyle(.plain)
-                    .accessibilityLabel(speech.isBusy ? "Stop Inbox recording" : "Start Inbox recording")
-                    .help(speech.isBusy ? "Stop recording · Control Option R" : "Record to Inbox · Control Option R")
-                Button { store.saveInboxCapture() } label: {
-                    Image(systemName: "arrow.right.circle.fill").font(.system(size: 19)).foregroundStyle(Theme.gold)
-                }.buttonStyle(.plain)
-                    .disabled(speech.isBusy || store.inboxDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityLabel("Clean up and review captured tasks").help("Clean up and review task drafts")
-            }.padding(12).background(Theme.surface, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(speech.isBusy ? Theme.gold : Theme.line))
-            HStack(spacing: 6) {
-                if speech.isStarting {
-                    ProgressView().controlSize(.mini)
-                    Text(speech.status)
-                } else if speech.isFinishing {
-                    ProgressView().controlSize(.mini)
-                    Text("Finishing transcript…")
-                } else if speech.recording {
-                    Circle().fill(Theme.alert).frame(width: 5, height: 5)
-                    Text("Recording · up to 60 seconds")
-                }
-            }.font(Theme.body(10)).foregroundStyle(speech.isBusy ? Theme.alert : Theme.secondary)
-            if let message = speech.message {
-                Text(message).font(Theme.body(11)).foregroundStyle(Theme.alert).lineSpacing(3)
+        VStack(alignment: .leading, spacing: 8) {
+            LibraryTextEditor(text: $store.inboxDraft, label: "Quick Inbox capture", onFiles: { files in store.taskCapture.addFiles(files); AppActions.capture() }, onImage: { bytes in store.taskCapture.pasteImage(bytes); AppActions.capture() }).frame(height: 70).background(Theme.surface, in: RoundedRectangle(cornerRadius: 10)).overlay(alignment: .topLeading) { if store.inboxDraft.isEmpty { Text("Capture text, links or images…").font(Theme.body(11)).foregroundStyle(Theme.secondary.opacity(0.8)).padding(12).allowsHitTesting(false) } }
+            HStack {
+                Button { AppActions.capture() } label: { Label(store.taskCapture.files.isEmpty ? "Add images" : "Images · \(store.taskCapture.files.count)", systemImage: "photo.on.rectangle") }.buttonStyle(.plain).font(Theme.body(11)).foregroundStyle(Theme.secondary)
+                Spacer()
+                Button { store.saveInboxCapture() } label: { Image(systemName: "arrow.right.circle.fill").font(.system(size: 21)).foregroundStyle(Theme.gold) }.buttonStyle(.plain).disabled(store.sharedInbox.saving || store.taskCapture.preparing > 0 || (store.inboxDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && store.taskCapture.files.isEmpty)).accessibilityLabel("Save item to Inbox")
             }
         }
-        .onChange(of: speech.isBusy) { _, busy in focused = !busy }
     }
 }
 
-private struct InboxTaskRow: View {
+struct InboxTaskRow: View {
     @EnvironmentObject var store: PlannerStore
     private let original: PlannerTask
     init(task: PlannerTask) { original = task }
@@ -135,8 +79,12 @@ private struct InboxTaskRow: View {
             }.font(Theme.body(10))
             TaskTagsView(tags: task.tags)
             HStack {
-                PriorityMenu(task: task)
+                Menu("Move") {
+                    Button("Library · Note") { store.moveInboxTaskToLibrary(task) }
+                    ForEach(Quadrant.allCases) { q in Button("Q\(q.rawValue) · \(q.title)") { store.assignPriority(taskID: task.id, quadrant: q) } }
+                }.menuStyle(.borderlessButton).fixedSize().font(Theme.body(11)).foregroundStyle(Theme.gold)
                 Spacer(minLength: 6)
+                CopyTextIcon(text: task.notes.isEmpty ? task.title : task.title + "\n\n" + task.notes)
                 Button { store.editingTask = task } label: { Image(systemName: "square.and.pencil") }
                     .buttonStyle(.plain).foregroundStyle(Theme.secondary).help("Review task").accessibilityLabel("Review \(task.title)")
                 Menu {

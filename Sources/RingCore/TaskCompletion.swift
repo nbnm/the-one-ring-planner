@@ -51,7 +51,7 @@ public enum TaskHistory {
         let previous = completion.taskSnapshot.remainingMinutes ?? 0
         task.remainingMinutes = previous > 0 ? previous : max(25, task.minimumBlockMinutes)
         task.minimumBlockMinutes = max(5, min(task.minimumBlockMinutes, task.remainingMinutes!))
-        task.schemaVersion = 3; task.updatedAt = now; task.revision += 1
+        task.schemaVersion = max(4, task.schemaVersion); task.updatedAt = now; task.revision += 1
         var entry = completion; entry.restoredAt = now
         return TaskRestoration(task: task, completion: entry)
     }

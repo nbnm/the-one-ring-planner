@@ -56,13 +56,13 @@ public struct CalendarRead: Sendable {
     public let calendarIDs: Set<String>
     public let events: [CalendarOccurrence]
     public init(interval: DateInterval, calendarIDs: Set<String>, events: [CalendarOccurrence]) { self.interval = interval; self.calendarIDs = calendarIDs; self.events = events }
-    public func meetings(day: Date, settings: PlanningSettings) throws -> [PlanBlock] {
+    public func meetings(day: Date, settings: PlanningSettings, fullDay: Bool = false) throws -> [PlanBlock] {
         let calendar = PlannerDate.calendar(settings)
         let start = calendar.startOfDay(for: day)
         guard interval.start == start, interval.end == calendar.date(byAdding: .day, value: 1, to: start) else {
             throw CalendarConnectionError.changedDuringRead
         }
-        let window = DateInterval(start: PlannerDate.at(settings.workStart, on: day, settings: settings), end: PlannerDate.at(settings.workEnd, on: day, settings: settings))
+        let window = fullDay ? interval : DateInterval(start: PlannerDate.at(settings.workStart, on: day, settings: settings), end: PlannerDate.at(settings.workEnd, on: day, settings: settings))
         var seen = Set<String>()
         return events.filter { calendarIDs.contains($0.calendarID) && !$0.managedByPlanner }.compactMap { $0.meeting(in: window) }.filter { seen.insert($0.id).inserted }
     }
@@ -156,6 +156,8 @@ public extension CalendarProviding {
         defaults.set(selectedIDs.sorted(), forKey: "googleCalendar.selectedIDs")
         invalidate()
     }
+    public func suspendForRestoredWorkspace() { enabled = false; invalidate() }
+    public func resumeAfterRestoreReview() { enabled = defaults.bool(forKey: "googleCalendar.enabled"); invalidate() }
     public func disconnect() async {
         enabled = false; defaults.set(false, forKey: "googleCalendar.enabled")
         selectedIDs = []; defaults.removeObject(forKey: "googleCalendar.selectedIDs")
@@ -233,13 +235,13 @@ public extension CalendarProviding {
             selection.contains($0.calendarID) && $0.start < interval.end && $0.end > interval.start && $0.start < $0.end && seen.insert($0.id).inserted
         })
     }
-    public func meetings(day: Date, settings: PlanningSettings) throws -> [PlanBlock] {
+    public func meetings(day: Date, settings: PlanningSettings, fullDay: Bool = false) throws -> [PlanBlock] {
         guard enabled else { return [] }
         guard access == .full else { throw CalendarConnectionError.accessRequired }
         guard !selectedIDs.isEmpty else { throw CalendarConnectionError.selectCalendars }
         guard connected, let loadedInterval else {
             throw CalendarConnectionError.changedDuringRead
         }
-        return try CalendarRead(interval: loadedInterval, calendarIDs: selectedIDs, events: events).meetings(day: day, settings: settings)
+        return try CalendarRead(interval: loadedInterval, calendarIDs: selectedIDs, events: events).meetings(day: day, settings: settings, fullDay: fullDay)
     }
 }

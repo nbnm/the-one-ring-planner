@@ -6,7 +6,7 @@ import RingCore
 
 @MainActor enum AppActions {
     static var capture: () -> Void = {}
-    static var recordInbox: () -> Void = {}
+    static var captureNote: () -> Void = {}
     static var recordMeeting: () -> Void = {}
     static var reviewCapture: (String) -> Void = { _ in }
     static var open: () -> Void = {}
@@ -26,7 +26,7 @@ import RingCore
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
-    private let store = PlannerStore(demo: CommandLine.arguments.contains("--demo"))
+    private let store = PlannerStore(demo: CommandLine.arguments.contains("--demo") || CommandLine.arguments.contains("--library-demo") || CommandLine.arguments.contains("--inbox-demo") || (Bundle.main.object(forInfoDictionaryKey: "OneRingIsolatedDemo") as? Bool == true))
     private var window: NSWindow!
     private var captureWindow: NSPanel?
     private var statusItem: NSStatusItem!
@@ -35,8 +35,6 @@ import RingCore
     private var terminating = false
     private let popover = NSPopover()
     private var hotkey: EventHotKeyRef?
-    private var recordingHotkey: EventHotKeyRef?
-    private let quickSpeech = SpeechCapture()
     private var handler: EventHandlerRef?
     private var keyMonitor: Any?
     private var updates: AnyCancellable?
@@ -44,16 +42,18 @@ import RingCore
     private var quadrantOwnsFullScreen = false
     private var fullScreenTransition = false
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if store.isDemo && CommandLine.arguments.contains("--demo-dark") { NSApp.appearance = NSAppearance(named: .darkAqua) }
+        if store.isDemo && CommandLine.arguments.contains("--demo-light") { NSApp.appearance = NSAppearance(named: .aqua) }
         AppActions.capture = { [weak self] in self?.openCapture() }
-        AppActions.recordInbox = { [weak self] in self?.toggleInboxRecording() }
+        AppActions.captureNote = { [weak self] in self?.openCapture(destination: .note) }
         AppActions.recordMeeting = { [weak self] in self?.recordMeetingAction() }
         AppActions.reviewCapture = { [weak self] text in
             guard let self else { return }
-            self.quickSpeech.stop(); self.captureWindow?.close()
+            guard self.store.taskCapture.preparing == 0 else { return }; self.captureWindow?.close()
             self.showMain(); self.store.prepareCapture(text)
         }
         AppActions.open = { [weak self] in self?.showMain() }
-        AppActions.prepareMeetingCapture = { [weak self] in self?.quickSpeech.stop(); self?.store.inboxSpeech.stop(); self?.captureWindow?.close() }
+        AppActions.prepareMeetingCapture = { [weak self] in self?.captureWindow?.close() }
         AppActions.enterQuadrantFullScreen = { [weak self] in self?.enterQuadrantFullScreen() }
         AppActions.leaveQuadrantFullScreen = { [weak self] in self?.leaveQuadrantFullScreen() }
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 840), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
@@ -62,7 +62,7 @@ import RingCore
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
         window.delegate = self
-        window.contentView = PlannerHostingView(rootView: MainView().environmentObject(store))
+        window.contentView = PlannerHostingView(rootView: MainView().environmentObject(store).environment(\.libraryDemoReduceMotion, store.isDemo && CommandLine.arguments.contains("--demo-reduce-motion")))
         window.center()
         setupMenuBar(); setupEyeMenu(); setupApplicationMenu(); registerShortcut()
         store.eventAlerts.openCalendar = { [weak self] day in
@@ -82,8 +82,7 @@ import RingCore
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard store.meetings.busy else { return .terminateNow }
-        if !terminating { terminating = true; Task { await store.meetings.shutdown(); sender.reply(toApplicationShouldTerminate: true) } }
+        if !terminating { terminating = true; Task { await store.telegram.stop(); await store.meetings.shutdown(); await store.library.prepareShutdown(); await store.taskCapture.flush(); await store.sharedInbox.shutdown(); sender.reply(toApplicationShouldTerminate: true) } }
         return .terminateLater
     }
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -97,18 +96,14 @@ import RingCore
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showMain(); return true }
     func applicationWillTerminate(_ notification: Notification) {
         store.taskDrag = nil
-        store.inboxSpeech.stop(); quickSpeech.stop()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         if let hotkey { UnregisterEventHotKey(hotkey) }
-        if let recordingHotkey { UnregisterEventHotKey(recordingHotkey) }
         if let handler { RemoveEventHandler(handler) }
     }
     func windowWillClose(_ notification: Notification) {
         if notification.object as? NSWindow === window {
             store.expandedQuadrant = nil; store.taskDrag = nil; quadrantOwnsFullScreen = false
         }
-        if notification.object as? NSWindow === window { store.inboxSpeech.stop() }
-        if notification.object as? NSWindow === captureWindow { quickSpeech.stop() }
     }
     private func enterQuadrantFullScreen() {
         guard !window.styleMask.contains(.fullScreen), !fullScreenTransition else { return }
@@ -142,8 +137,6 @@ import RingCore
         menu.addItem(withTitle: "About The One Ring Planner", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quick Capture", action: #selector(captureAction), keyEquivalent: "n").target = self
-        let recordItem = menu.addItem(withTitle: "Record to Inbox", action: #selector(recordInboxAction), keyEquivalent: "r")
-        recordItem.target = self; recordItem.keyEquivalentModifierMask = [.control, .option]
         menu.addItem(withTitle: "Open Planner", action: #selector(openAction), keyEquivalent: "1").target = self
         menu.addItem(withTitle: "Record meeting…", action: #selector(recordMeetingAction), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Open recordings · The Eye", action: #selector(openMeetings), keyEquivalent: "").target = self
@@ -221,7 +214,6 @@ import RingCore
         }
     }
     @objc private func captureAction() { openCapture() }
-    @objc private func recordInboxAction() { toggleInboxRecording() }
     @objc private func openAction() { showMain() }
     private func setupEyeMenu() {
         eyePopover.behavior = .semitransient
@@ -254,22 +246,18 @@ import RingCore
         popover.performClose(nil)
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
-    private func openCapture() {
-        store.inboxSpeech.stop()
+    private func openCapture(destination: CaptureDestination = .inbox) {
+        store.captureDestination = destination
+        if destination == .inbox && store.inboxDraft.isEmpty && store.taskCapture.files.isEmpty && store.taskCapture.preparing == 0 { store.taskCapture.rotateIdentity() }
+        if destination == .note && !store.library.draft.hasContent && store.library.preparingAttachments == 0 { store.library.draft = LibraryDraft() }
         popover.performClose(nil)
         if let captureWindow, captureWindow.isVisible { captureWindow.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 636, height: 410), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 656, height: 500), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         panel.title = "Quick Capture · The One Ring Planner"; panel.titlebarAppearsTransparent = true
         panel.isReleasedWhenClosed = false; panel.level = .floating; panel.hidesOnDeactivate = false
         panel.delegate = self
-        quickSpeech.clear()
-        panel.contentView = NSHostingView(rootView: CaptureView(speech: quickSpeech, close: { [weak self] in self?.captureWindow?.close() }).environmentObject(store))
+        panel.contentView = NSHostingView(rootView: CaptureView(close: { [weak self] in self?.captureWindow?.close() }).environmentObject(store))
         captureWindow = panel; panel.center(); panel.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
-    }
-    private func toggleInboxRecording() {
-        quickSpeech.stop(); captureWindow?.close()
-        showMain()
-        store.toggleInboxRecording()
     }
     private func registerShortcut() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -278,13 +266,11 @@ import RingCore
                     if !event.isARepeat { Task { @MainActor in AppActions.capture() } }
                     return nil
                 }
-                if event.keyCode == UInt16(kVK_ANSI_R) {
-                    if !event.isARepeat { Task { @MainActor in AppActions.recordInbox() } }
-                    return nil
-                }
+
             }
             return event
         }
+        if store.isDemo { return } // Demo shortcuts stay local to its window.
         var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         let callback: EventHandlerUPP = { _, event, _ in
             var id = EventHotKeyID()
@@ -293,7 +279,6 @@ import RingCore
             let action = id.id
             Task { @MainActor in
                 if action == 1 { AppActions.capture() }
-                else if action == 2 { AppActions.recordInbox() }
             }
             return noErr
         }
@@ -302,9 +287,7 @@ import RingCore
         let id = EventHotKeyID(signature: OSType(0x52494E47), id: 1)
         let status = RegisterEventHotKey(UInt32(kVK_Space), UInt32(controlKey | optionKey), id, GetApplicationEventTarget(), 0, &hotkey)
         if status != noErr { store.showNotice("Control Option Space is already in use. Capture is in the menu bar.") }
-        let voiceID = EventHotKeyID(signature: OSType(0x52494E47), id: 2)
-        let voiceStatus = RegisterEventHotKey(UInt32(kVK_ANSI_R), UInt32(controlKey | optionKey), voiceID, GetApplicationEventTarget(), 0, &recordingHotkey)
-        if voiceStatus != noErr { store.showNotice("Control Option R is already in use. Use the Inbox microphone to record.") }
+
     }
 }
 
@@ -332,7 +315,6 @@ struct MenuBarView: View {
             }
             DividerLine()
             Button { AppActions.capture() } label: { HStack { Label("Quick capture", systemImage: "plus"); Spacer(); Text("⌃⌥Space").foregroundStyle(Theme.secondary) } }.buttonStyle(.plain).font(Theme.body(12))
-            Button { AppActions.recordInbox() } label: { HStack { Label("Record to Inbox", systemImage: "mic"); Spacer(); Text("⌃⌥R").foregroundStyle(Theme.secondary) } }.buttonStyle(.plain).font(Theme.body(12))
             MenuBarMeetingControl(meetings: store.meetings)
             Button { AppActions.open() } label: { HStack { Text("Open planner"); Spacer(); Image(systemName: "arrow.up.right") } }.buttonStyle(.plain).font(Theme.body(12))
             HStack { Text(store.calendarConnection.status).font(Theme.body(9)).foregroundStyle(Theme.secondary); Spacer(); Button("Quit") { NSApp.terminate(nil) }.buttonStyle(.plain).font(Theme.body(10)).foregroundStyle(Theme.secondary) }

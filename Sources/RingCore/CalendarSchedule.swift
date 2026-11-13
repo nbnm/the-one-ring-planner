@@ -17,7 +17,7 @@ public struct CalendarScheduleUpdate {
 public enum CalendarSchedule {
     /// Merge Google times into the publication's original owner. Stable IDs and occurrence
     /// history stay there; day views project moved blocks onto their actual dates.
-    public static func reconciling(_ original: DayPlan, times: [CalendarEventTime], settings: PlanningSettings, includingPending: Bool = false) -> CalendarScheduleUpdate {
+    public static func reconciling(_ original: DayPlan, times: [CalendarEventTime], settings: PlanningSettings, includingPending: Bool = false, tasks: [PlannerTask] = []) -> CalendarScheduleUpdate {
         guard var publication = original.publication, publication.state != .pending || includingPending else {
             return CalendarScheduleUpdate(plan: original, changedEvents: 0, conflicts: [])
         }
@@ -63,12 +63,12 @@ public enum CalendarSchedule {
             }
             publication.lastPublishedEvents = baselines.values.sorted { $0.id < $1.id }
             plan.publication = publication; plan.revision += 1
-            plan = Scheduler().refreshingLayout(plan, settings: settings)
+            plan = Scheduler().refreshingLayout(plan, settings: settings, tasks: tasks)
         }
         return CalendarScheduleUpdate(plan: plan, changedEvents: changed, conflicts: conflicts)
     }
 
-    public static func plan(on day: Date, plans: [DayPlan], settings: PlanningSettings, now: Date, forDisplay: Bool = false) -> DayPlan? {
+    public static func plan(on day: Date, plans: [DayPlan], settings: PlanningSettings, now: Date, forDisplay: Bool = false, tasks: [PlannerTask] = []) -> DayPlan? {
         let key = PlannerDate.key(day, settings: settings)
         let incoming = plans.filter { $0.id != key }.flatMap(\.blocks).filter {
             $0.calendarOwnerDay != nil && PlannerDate.key($0.start, settings: settings) == key && ($0.kind == .focus || $0.kind == .routine)
@@ -78,7 +78,7 @@ public enum CalendarSchedule {
         result.blocks += incoming.filter { !ids.contains($0.id) }
         if forDisplay {
             result.blocks.removeAll { PlannerDate.key($0.start, settings: settings) != key }
-            result = Scheduler().refreshingLayout(result, settings: settings)
+            result = Scheduler().refreshingLayout(result, settings: settings, tasks: tasks)
         }
         result.blocks.sort { $0.start == $1.start ? $0.id < $1.id : $0.start < $1.start }
         return result

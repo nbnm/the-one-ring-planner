@@ -88,7 +88,7 @@ extension PlannerStore {
         return true
     }
     func retryPendingPublications(force: Bool = false) async {
-        guard !isDemo, !publishingCalendar else { return }
+        guard !isDemo, !publicationDefaults.bool(forKey: "workspace.restoreNeedsReview"), !publishingCalendar else { return }
         await retryCalendarEdits(force: force)
         guard !publishingCalendar else { return }
         let editingDays = Set(calendarEdits.filter(\.unresolved).map { $0.publication.day })

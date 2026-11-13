@@ -27,8 +27,18 @@ struct CalendarPage: View {
         }
         return result
     }
-    private var startHour: Int { fullDay ? 0 : max(0, store.settings.workStart / 60 - 1) }
-    private var endHour: Int { fullDay ? 24 : min(24, (store.settings.workEnd + 59) / 60 + 1) }
+    private var startHour: Int {
+        if fullDay { return 0 }
+        let personal = bookingTask?.area == .personal ? days.map { store.settings.taskWindow(.personal, on: $0).start }.min() : nil
+        let first = events.map { store.calendar.component(.hour, from: $0.start) * 60 }.min()
+        return max(0, min(store.settings.workStart, personal ?? store.settings.workStart, first ?? store.settings.workStart) / 60 - 1)
+    }
+    private var endHour: Int {
+        if fullDay { return 24 }
+        let personal = bookingTask?.area == .personal ? days.map { store.settings.taskWindow(.personal, on: $0).end }.max() : nil
+        let last = events.map { store.calendar.component(.hour, from: $0.end) * 60 + store.calendar.component(.minute, from: $0.end) }.max()
+        return min(24, (max(store.settings.workEnd, personal ?? store.settings.workEnd, last ?? store.settings.workEnd) + 59) / 60 + 1)
+    }
     private var loadKey: String { "\(interval.start.timeIntervalSince1970)|\(week)|\(store.settings.timeZone)|\(store.calendarConnection.enabled)|\(store.calendarConnection.selectedIDs.sorted())|\(store.calendarConnection.lastRead?.timeIntervalSince1970 ?? 0)|\(refreshID)|\(store.calendarGridRevision)" }
     private var rangeTitle: String {
         let format = DateFormatter(); format.calendar = store.calendar; format.timeZone = store.calendar.timeZone

@@ -7,6 +7,7 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" build/AppIcon.i
 cp .build/release/TheOneRingPlanner "$APP_DIR/Contents/MacOS/"
 cp Resources/Info.plist "$APP_DIR/Contents/Info.plist"
 cp Sources/RingPlanner/Assets/OneRing.png "$APP_DIR/Contents/Resources/OneRing.png"
+cp Sources/RingPlanner/Assets/TelegramAvatar.jpg "$APP_DIR/Contents/Resources/TelegramAvatar.jpg"
 cp Sources/RingPlanner/Assets/EyeOfSauron.png "$APP_DIR/Contents/Resources/EyeOfSauron.png"
 swift scripts/GenerateIcon.swift "$PWD/build/AppIcon-1024.png" "$PWD/Sources/RingPlanner/Assets/OneRing.png"
 for n in 16 32 128 256 512; do

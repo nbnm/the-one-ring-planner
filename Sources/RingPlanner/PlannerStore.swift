@@ -25,7 +25,7 @@ import Combine
     @Published var celebration: Routine?
     @Published var taskCelebration: TaskCompletionFeedback?
     private let completionSound = TaskCompletionSound()
-    @Published var inboxDraft = ""
+    @Published var inboxDraft = "" { didSet { taskCapture.text = inboxDraft } }
     @Published var buildingPlan = false
     @Published var publishingCalendar = false
     @Published var enablingCalendarWriting = false
@@ -47,8 +47,17 @@ import Combine
     var calendarGridDemoEvents: [CalendarOccurrence] = []
     var taskSlotCalendarCache: TaskSlotCalendarSnapshot?
     var calendarScheduleTask: Task<Void, Never>?
-    let inboxSpeech = SpeechCapture()
+    let taskCapture: TaskCaptureAssets
+    private var taskCaptureUpdates: AnyCancellable?
     let captureAI: CaptureAISettings
+    let library: LibraryStore
+    let telegram: TelegramStore
+    private var telegramUpdates: AnyCancellable?
+    let sharedInbox: SharedInboxStore
+    private var sharedInboxUpdates: AnyCancellable?
+    var libraryDropRegions: [CGRect] = []
+    @Published var captureDestination = CaptureDestination.inbox
+    private var libraryUpdates: AnyCancellable?
     let meetings: MeetingStore
     let eventAlerts: EventAlerts
     var eventAlertUpdates: AnyCancellable?
@@ -65,8 +74,8 @@ import Combine
     private var publicationTimer: Timer?
     private var calendarUpdates: AnyCancellable?
     enum Page: String, CaseIterable {
-        case today = "Today", calendar = "Calendar", matrix = "Priority matrix", routines = "Routines", meetings = "The Eye", review = "Daily review", history = "History", settings = "Settings"
-        var icon: String { switch self { case .today: return "sun.max"; case .calendar: return "calendar"; case .matrix: return "square.grid.2x2"; case .routines: return "sparkles"; case .meetings: return "eye"; case .review: return "book.closed"; case .history: return "clock.arrow.circlepath"; case .settings: return "slider.horizontal.3" } }
+        case today = "Today", inbox = "Inbox", calendar = "Calendar", matrix = "Priority matrix", routines = "Routines", meetings = "The Eye", library = "Library", review = "Daily review", history = "History", settings = "Settings"
+        var icon: String { switch self { case .today: return "sun.max"; case .inbox: return "tray"; case .calendar: return "calendar"; case .matrix: return "square.grid.2x2"; case .routines: return "sparkles"; case .meetings: return "eye"; case .library: return "books.vertical"; case .review: return "book.closed"; case .history: return "clock.arrow.circlepath"; case .settings: return "slider.horizontal.3" } }
     }
     init(demo: Bool = false) {
         isDemo = demo
@@ -79,14 +88,22 @@ import Combine
         var localRepository: DataRepository?
         var identity = UUID().uuidString.lowercased()
         do {
-            let base = demo ? FileManager.default.temporaryDirectory.appendingPathComponent("one-ring-preview-\(UUID().uuidString)") : support
+            let selectedRoot = demo ? nil : UserDefaults.standard.string(forKey: "workspace.restoredRoot").map { URL(fileURLWithPath: $0) }
+            let base = demo ? FileManager.default.temporaryDirectory.appendingPathComponent("one-ring-preview-\(UUID().uuidString)") : (selectedRoot ?? support)
             localRepository = try DataRepository(root: base.appendingPathComponent("Data"), localState: base.appendingPathComponent("Local"))
             identity = try localRepository!.workspaceID()
         } catch { initialError = error.localizedDescription; localRepository = nil }
         repository = localRepository; workspaceID = identity
+        library = LibraryStore(repository: localRepository, ai: captureAI, demo: demo)
+        sharedInbox = SharedInboxStore(repository: localRepository, library: library, demo: demo)
+        telegram = TelegramStore(repository: localRepository, ai: captureAI, inbox: sharedInbox, demo: demo)
+        taskCapture = TaskCaptureAssets(repository: localRepository)
         googleCalendar = GoogleCalendarProvider(oauth: GoogleOAuthClient(storage: GoogleKeychainStore(service: demo ? "com.t1a.the-one-ring-planner.demo.google-direct" : "com.t1a.the-one-ring-planner.google-direct")), workspaceID: identity)
         calendarConnection = CalendarConnection(provider: googleCalendar, defaults: demo ? UserDefaults(suiteName: "com.t1a.calendar-demo.\(UUID().uuidString)")! : .standard)
-        meetings = MeetingStore(root: demo ? FileManager.default.temporaryDirectory.appendingPathComponent("one-ring-meetings-demo-\(identity)") : support.appendingPathComponent("Meetings"), ai: captureAI, demo: demo)
+        let restoredMeetingRoot = !demo && publicationDefaults.bool(forKey: "workspace.restoredMeetings") ? publicationDefaults.string(forKey: "workspace.restoredRoot").map { URL(fileURLWithPath: $0).appendingPathComponent("Meetings") } : nil
+        meetings = MeetingStore(root: demo ? FileManager.default.temporaryDirectory.appendingPathComponent("one-ring-meetings-demo-\(identity)") : (restoredMeetingRoot ?? support.appendingPathComponent("Meetings")), ai: captureAI, demo: demo)
+        library.meetingsRoot = meetings.repository?.root
+        if !demo && publicationDefaults.bool(forKey: "workspace.restoreNeedsReview") { calendarConnection.suspendForRestoredWorkspace() }
         self.error = initialError
         do {
             if let repository {
@@ -119,11 +136,42 @@ import Combine
                 offerTimeSlot(for: task)
             }
         }
+        library.recordingIsActive = { [weak self] in guard let self else { return true }; return self.meetings.busy || self.buildingPlan || self.publishingCalendar || self.calendarEditSending }
+        library.restoreSelection = { [weak self] root, includesMeetings in
+            guard let self, !self.library.recordingIsActive(), !self.library.saving else { return }
+            self.publicationDefaults.set(root.path, forKey: "workspace.restoredRoot")
+            self.publicationDefaults.set(includesMeetings, forKey: "workspace.restoredMeetings")
+            self.publicationDefaults.set(true, forKey: "workspace.restoreNeedsReview")
+            self.showNotice("Restored workspace selected · quit and reopen to switch. Review calendar connections before enabling sync.")
+        }
+        telegram.command = { [weak self] text in
+            guard let self else { return "Planner is unavailable." }
+            if text.split(whereSeparator: \.isWhitespace).first?.split(separator: "@").first == "/status" { return "\(self.telegram.status)\nPending captures: \(self.telegram.state.jobs.count)" }
+            return TelegramCommands.reply(text, tasks: self.tasks, plans: self.plans, inbox: self.sharedInbox.items, settings: self.settings, now: Date())
+        }
+        telegram.digest = { [weak self] day in guard let self else { return "Planner is unavailable." }; return TelegramCommands.plan(day, plans: self.plans, tasks: self.tasks, settings: self.settings, now: Date()) }
+        telegram.urgent = { [weak self] in self?.tasks ?? [] }
+        telegram.defaultAudioModel = { [weak self] in self?.meetings.audioModel ?? "" }
+        telegram.reminders = { [weak self] in
+            guard let self else { return [] }
+            let date = Date()
+            let events = self.calendarConnection.enabled ? try await self.calendarConnection.readRange(DateInterval(start: date.addingTimeInterval(-90), end: date.addingTimeInterval(3600))).events : []
+            return EventReminderPlanner.reminders(events: events, plans: self.plans, tasks: self.tasks, now: date.addingTimeInterval(-90))
+        }
+        telegramUpdates = telegram.objectWillChange.sink { [weak self] in Task { @MainActor in self?.objectWillChange.send() } }
+        telegram.start()
+        sharedInbox.knownTags = { [weak self] in self?.knownTags ?? [] }
+        inboxDraft = taskCapture.text
+        sharedInboxUpdates = sharedInbox.objectWillChange.sink { [weak self] in Task { @MainActor in self?.objectWillChange.send() } }
+        taskCaptureUpdates = taskCapture.objectWillChange.sink { [weak self] in Task { @MainActor in self?.objectWillChange.send() } }
+        libraryUpdates = library.objectWillChange.sink { [weak self] in Task { @MainActor in self?.objectWillChange.send() } }
+        if CommandLine.arguments.contains("--library-demo") || (demo && Bundle.main.object(forInfoDictionaryKey: "OneRingIsolatedDemo") as? Bool == true) { page = .library }
         meetings.importTasks = { [weak self] in self?.importMeetingTasks($0) ?? false }
         meetings.planningSettings = { [weak self] in self?.settings ?? PlanningSettings() }
         meetings.knownTags = { [weak self] in self?.knownTags ?? [] }
         meetings.recoverImports()
         meetingUpdates = meetings.objectWillChange.sink { [weak self] in Task { @MainActor in self?.objectWillChange.send() } }
+        if CommandLine.arguments.contains("--inbox-demo") { page = .inbox }
         if CommandLine.arguments.contains("--meeting-demo") { page = .meetings }
         calendarConnection.onRefresh = { [weak self] _ in await self?.synchronizeCalendarSchedule() }
         calendarUpdates = calendarConnection.objectWillChange.sink { [weak self] in
@@ -149,13 +197,17 @@ import Combine
             }
         }
     }
+    var compactNavigation: Bool {
+        get { publicationDefaults.object(forKey: "navigation.compact") as? Bool ?? true }
+        set { objectWillChange.send(); publicationDefaults.set(newValue, forKey: "navigation.compact") }
+    }
     var calendar: Calendar { PlannerDate.calendar(settings) }
     var nextPlanningDay: Date { PlannerDate.nextWorkingDay(after: now, settings: settings) }
     var dayKey: String { PlannerDate.key(selectedDay, settings: settings) }
     var plan: DayPlan? { plans.first { $0.id == dayKey } }
-    var displayPlan: DayPlan? { CalendarSchedule.plan(on: selectedDay, plans: plans, settings: settings, now: now, forDisplay: true) }
+    var displayPlan: DayPlan? { CalendarSchedule.plan(on: selectedDay, plans: plans, settings: settings, now: now, forDisplay: true, tasks: tasks) }
     func planningPlan(on day: Date) -> DayPlan? { CalendarSchedule.plan(on: day, plans: plans, settings: settings, now: now) }
-    var todayPlan: DayPlan? { CalendarSchedule.plan(on: now, plans: plans, settings: settings, now: now, forDisplay: true) }
+    var todayPlan: DayPlan? { CalendarSchedule.plan(on: now, plans: plans, settings: settings, now: now, forDisplay: true, tasks: tasks) }
     var inbox: [PlannerTask] { tasks.filter { $0.state == .inbox }.sorted { $0.createdAt < $1.createdAt } }
     var activeTasks: [PlannerTask] { tasks.filter { $0.state != .done && $0.state != .archived && $0.state != .inbox } }
     var completionSoundEnabled: Bool {
@@ -178,37 +230,21 @@ import Combine
     func duration(_ minutes: Int) -> String { minutes >= 60 ? "\(minutes / 60)h\(minutes % 60 == 0 ? "" : " \(minutes % 60)m")" : "\(minutes)m" }
     func dayTitle(_ date: Date) -> String { let f = DateFormatter(); f.timeZone = calendar.timeZone; f.dateFormat = "EEEE, MMMM d"; return f.string(from: date) }
     func dateChanged(_ amount: Int) { selectedDay = calendar.date(byAdding: .day, value: amount, to: selectedDay) ?? selectedDay }
-    func toggleInboxRecording() {
-        if inboxSpeech.isBusy { inboxSpeech.finish(); return }
-        let prefix = inboxDraft
-        Task {
-            await inboxSpeech.start(locale: settings.speechLocale, onTranscript: { [weak self] transcript in
-                guard !transcript.isEmpty else { return }
-                self?.inboxDraft = prefix + (prefix.isEmpty ? "" : "\n") + transcript
-            }, onFinished: { [weak self] _ in
-                guard let self else { return }
-                self.prepareCapture(self.inboxDraft)
-            })
-        }
-    }
-    func saveInboxCapture() {
-        guard !inboxSpeech.isBusy else { return }
-        prepareCapture(inboxDraft)
-    }
+    func saveInboxCapture() { Task { _ = await captureIntoInbox() } }
     func refineInboxTask(_ task: PlannerTask) {
         guard task.state == .inbox else { return }
         prepareCapture(task.title + (task.notes.isEmpty ? "" : "\n" + task.notes), replacing: task)
     }
     func prepareCapture(_ text: String, replacing original: PlannerTask? = nil) {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty, !inboxSpeech.isBusy else { return }
+        guard taskCapture.preparing == 0, !clean.isEmpty || !taskCapture.files.isEmpty || !(original?.attachments.isEmpty ?? true) else { return }
         captureReview?.cancel()
-        let review = CaptureReview(source: clean, originalTask: original)
+        let review = CaptureReview(source: clean, originalTask: original, files: original == nil ? taskCapture.files : [], demo: isDemo)
         captureReview = review
-        review.process(settings: captureAI, knownTags: knownTags)
+        review.process(settings: captureAI, knownTags: knownTags, repository: repository)
     }
     @discardableResult func confirmCapture(_ review: CaptureReview) -> Bool {
-        guard captureReview?.id == review.id, !review.processing else { return false }
+        guard captureReview?.id == review.id, !review.processing, review.assetsReady else { return false }
         do {
             var original: PlannerTask?
             if let snapshot = review.originalTask {
@@ -217,12 +253,13 @@ import Combine
                 }
                 original = current
             }
-            let batch = try ReviewedCapture(source: review.source, drafts: review.drafts, settings: settings, knownTags: knownTags, replacing: original)
-            let saved = persist(message: "Confirm reviewed capture", tasks: batch.tasks, captures: [batch.capture]) {
+            let batch = try ReviewedCapture(source: review.source, drafts: review.drafts, settings: settings, knownTags: knownTags, replacing: original, attachments: review.attachments)
+            let saved = persist(message: "Confirm reviewed capture", tasks: batch.tasks, captures: [batch.capture], attachments: review.preparedAttachments.map(\.write)) {
                 let changed = Set(batch.tasks.map(\.id))
                 self.tasks.removeAll { changed.contains($0.id) }; self.tasks.append(contentsOf: batch.tasks)
-                if original == nil && self.inboxDraft.trimmingCharacters(in: .whitespacesAndNewlines) == review.source { self.inboxDraft = ""; self.inboxSpeech.clear() }
+                if original == nil && self.inboxDraft.trimmingCharacters(in: .whitespacesAndNewlines) == review.source { self.inboxDraft = ""; self.taskCapture.removeConfirmed(review.files) }
                 self.captureReview = nil
+                for task in batch.tasks { self.categorizeInventoryTask(task) }
                 self.showNotice(original == nil ? (batch.tasks.count == 1 ? "Task added to Inbox" : "\(batch.tasks.count) tasks added to Inbox") : "Inbox task refined\(batch.tasks.count > 1 ? "; \(batch.tasks.count - 1) added" : "")")
             }
             if !saved { review.message = error ?? "Your tasks could not be saved. The drafts are preserved." }
@@ -245,7 +282,7 @@ import Combine
         }
     }
     func updateTaskDrag(taskID: String, title: String, location: CGPoint) {
-        guard page == .matrix, tasks.contains(where: { $0.id == taskID && $0.state != .done && $0.state != .archived }) else { return }
+        guard (page == .matrix || page == .library || page == .inbox || page == .today), tasks.contains(where: { $0.id == taskID && $0.state != .done && $0.state != .archived }) || sharedInbox.active.contains(where: { "inbox:" + $0.id == taskID }) else { return }
         taskDrag = TaskDragSession(taskID: taskID, title: title, location: location)
     }
     func expandQuadrant(_ quadrant: Quadrant) {
@@ -262,8 +299,15 @@ import Combine
     func finishTaskDrag(taskID: String, location: CGPoint) {
         let active = taskDrag?.taskID == taskID
         taskDrag = nil
-        guard active, page == .matrix, let quadrant = priorityDropTarget(at: location) else { return }
-        assignPriority(taskID: taskID, quadrant: quadrant)
+        guard active else { return }
+        if libraryDropRegions.contains(where: { $0.contains(location) }) {
+            if let item = sharedInbox.active.first(where: { "inbox:" + $0.id == taskID }) { placeInboxInLibrary(item) }
+            else if let task = inbox.first(where: { $0.id == taskID }) { moveInboxTaskToLibrary(task) }
+            return
+        }
+        guard page == .matrix, let quadrant = priorityDropTarget(at: location) else { return }
+        if let item = sharedInbox.active.first(where: { "inbox:" + $0.id == taskID }) { placeInbox(item, in: quadrant) }
+        else { assignPriority(taskID: taskID, quadrant: quadrant) }
     }
     /// Both drag-and-drop and dropdowns use this gate; no partial classification is persisted.
     func assignPriority(taskID: String, quadrant: Quadrant) {
@@ -301,7 +345,7 @@ import Combine
         do {
             let captures: [Capture] = disposition == .delete ? try repository?.load(Capture.self, directory: "captures") ?? [] : []
             let change = TaskLifecycle.change(task, to: disposition, plans: plans, captures: captures, now: isDemo ? now : Date())
-            let changedPlans = disposition == .complete || disposition == .backlog ? change.plans.map { Scheduler().refreshingLayout($0, settings: settings) } : change.plans
+            let changedPlans = disposition == .complete || disposition == .backlog ? change.plans.map { Scheduler().refreshingLayout($0, settings: settings, tasks: tasks) } : change.plans
             let message = disposition == .complete ? "Complete task and save history" : disposition == .delete ? "Delete task" : disposition == .archive ? "Archive task" : disposition == .backlog ? "Return task to backlog" : "Move task to Inbox"
             let cancelledEdits = (disposition == .complete || disposition == .backlog) ? cancelledTaskCalendarEdits(task.id) : []
             return persist(message: message, tasks: change.task.map { [$0] } ?? [], captures: change.captures,
@@ -355,7 +399,7 @@ import Combine
     }
     private func celebrateCompletion(_ entry: TaskCompletion) {
         taskCelebration = TaskCompletionFeedback(completion: entry)
-        if completionSoundEnabled && meetings.activeID == nil && !meetings.finishing && !inboxSpeech.isBusy { completionSound.play() }
+        if completionSoundEnabled && meetings.activeID == nil && !meetings.finishing { completionSound.play() }
     }
     private func cancelledTaskCalendarEdits(_ taskID: String) -> [CalendarBlockEdit] {
         calendarEdits.filter { $0.unresolved && $0.event.taskID == taskID }.map { original in
@@ -402,7 +446,7 @@ import Combine
             throw PlanningReadError.failed(calendarConnection.message ?? CalendarConnectionError.changedDuringRead.localizedDescription)
         }
         if calendarScheduleReadFailed, let calendarScheduleError { throw PlanningReadError.failed(calendarScheduleError) }
-        return PlanningMeetings(blocks: try read.meetings(day: day, settings: snapshot), readAt: Date())
+        return PlanningMeetings(blocks: try read.meetings(day: day, settings: snapshot, fullDay: true), readAt: Date())
     }
     @discardableResult func buildDraft(day: Date, outcomes: [String]? = nil, selectedTaskIDs: [String]?, confirmToCalendar: Bool = false) async -> Bool {
         guard !buildingPlan, !publishingCalendar else { return false }
@@ -474,7 +518,7 @@ import Combine
                 let allPlans = plans.map { $0.id == p.id ? p : $0 }
                 let change = TaskLifecycle.change(t, to: .complete, plans: allPlans, now: isDemo ? now : Date(), completedBlockID: block.id)
                 var affected = change.plans; if !affected.contains(where: { $0.id == p.id }) { affected.append(p) }
-                affected = affected.map { Scheduler().refreshingLayout($0, settings: settings) }
+                affected = affected.map { Scheduler().refreshingLayout($0, settings: settings, tasks: tasks) }
                 _ = persist(message: "Complete task block and save history", tasks: change.task.map { [$0] } ?? [], completions: change.completions, calendarEdits: cancelledTaskCalendarEdits(t.id), plans: affected) {
                     self.applyTasks(change.task.map { [$0] } ?? []); self.showNotice("Task completed · saved in History")
                     if let entry = change.completions.first { self.celebrateCompletion(entry) }
@@ -512,25 +556,26 @@ import Combine
         if additions.isEmpty && captures.contains(where: { $0.id == receipt.capture.id }) { return true }
         return persist(message: "Import reviewed meeting tasks", tasks: additions, captures: captures.contains(where: { $0.id == receipt.capture.id }) ? [] : [receipt.capture]) {
             self.tasks.append(contentsOf: additions)
+            for task in additions { self.categorizeInventoryTask(task) }
             self.showNotice("\(receipt.tasks.count) meeting \(receipt.tasks.count == 1 ? "task" : "tasks") added to Inbox")
         }
     }
-    @discardableResult func persist(message: String, tasks: [PlannerTask] = [], captures: [Capture] = [], routines: [Routine] = [], completions: [TaskCompletion] = [], calendarEdits: [CalendarBlockEdit] = [], plan: DayPlan? = nil, plans: [DayPlan] = [], deletingTaskIDs: [String] = [], settings: PlanningSettings? = nil, apply: () -> Void) -> Bool {
+    @discardableResult func persist(message: String, tasks: [PlannerTask] = [], captures: [Capture] = [], routines: [Routine] = [], completions: [TaskCompletion] = [], calendarEdits: [CalendarBlockEdit] = [], plan: DayPlan? = nil, plans: [DayPlan] = [], deletingTaskIDs: [String] = [], settings: PlanningSettings? = nil, notes: [LibraryNote] = [], attachments: [RepositoryAttachmentWrite] = [], apply: () -> Void) -> Bool {
         guard let repository else { error = "The local workspace is unavailable. Your edit has not been saved."; return false }
         func prepared(_ value: DayPlan) -> DayPlan {
             var p = CalendarSchedule.canonical(value)
-            if p != value { p = Scheduler().refreshingLayout(p, settings: self.settings) }
+            if p != value { p = Scheduler().refreshingLayout(p, settings: self.settings, tasks: self.tasks) }
             if let publication = p.publication { p.publication = publication.invalidatingChanges(in: p, timeZone: self.settings.timeZone) }
             return p
         }
         let savedPlan = plan.map(prepared), savedPlans = plans.map(prepared)
         do {
-            try repository.save(tasks: tasks, captures: captures, routines: routines, completions: completions, calendarEdits: calendarEdits, plan: savedPlan, plans: savedPlans, deletingTaskIDs: deletingTaskIDs, settings: settings, message: message)
+            try repository.save(tasks: tasks, captures: captures, routines: routines, completions: completions, calendarEdits: calendarEdits, plan: savedPlan, plans: savedPlans, deletingTaskIDs: deletingTaskIDs, settings: settings, notes: notes, attachments: attachments, message: message)
             apply()
             for e in calendarEdits { self.calendarEdits.removeAll { $0.id == e.id }; self.calendarEdits.append(e) }
             for entry in completions { self.completions.removeAll { $0.id == entry.id }; self.completions.append(entry) }
             if let savedPlan { applyPlan(savedPlan) }; for p in savedPlans { applyPlan(p) }
-            savedAt = Date(); return true
+            savedAt = Date(); library.scheduleBackup(); return true
         }
         catch { self.error = error.localizedDescription; return false }
     }
@@ -608,4 +653,5 @@ struct PriorityReviewRequest: Identifiable {
     var id: String { task.id }
     let task: PlannerTask
     let originalRevision: Int
+    var inboxItem: InboxItem? = nil
 }

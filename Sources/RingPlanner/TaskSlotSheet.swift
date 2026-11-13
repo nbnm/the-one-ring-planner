@@ -21,7 +21,7 @@ struct TaskSlotSheet: View {
     @State private var assessment: TaskSlotAssessment?
     init(request: TaskSlotRequest) { self.request = request; _startDay = State(initialValue: request.day); _minutes = State(initialValue: request.minutes) }
     private struct Search: Equatable { let day: Date; let minute: Int; let duration: Int; let weekends: Bool; let refresh: Int; let automaticFit: Bool }
-    private var earliest: Int { notBefore < 0 ? store.settings.workStart : notBefore }
+    private var earliest: Int { notBefore < 0 ? (request.task.area == .personal ? 0 : store.settings.workStart) : notBefore }
     private var search: Search { Search(day: startDay, minute: earliest, duration: minutes, weekends: weekends, refresh: refresh, automaticFit: fitEarlierGaps && request.task.allowsSplitting) }
     var body: some View {
         Group {
@@ -64,9 +64,9 @@ struct TaskSlotSheet: View {
                 HStack {
                     if search.automaticFit { Text("Block: up to \(minutes) minutes") }
                     else { TaskSlotDurationPicker(task: request.task, available: request.minutes, minutes: $minutes) }
-                    Spacer(); Toggle("Include weekends", isOn: $weekends).toggleStyle(.checkbox)
+                    Spacer(); if request.task.area == .work { Toggle("Include weekends", isOn: $weekends).toggleStyle(.checkbox) }
                 }.font(Theme.body(12))
-                Text("Checks the next seven workdays from the chosen date in order. Calendar events, planned tasks, routines and lunch are included. Interruption reserve is shown as a warning, so it won’t hide an otherwise free time.").font(Theme.body(11)).foregroundStyle(Theme.secondary)
+                Text(request.task.area == .personal ? "Checks your personal hours, including weekends, against calendar events and existing plans." : "Checks the next seven workdays from the chosen date in order. Calendar events, planned tasks, routines and lunch are included. Interruption reserve is shown as a warning, so it won’t hide an otherwise free time.").font(Theme.body(11)).foregroundStyle(Theme.secondary)
                     }.padding(.top, 8)
                 }.font(Theme.body(12))
                 if loading {

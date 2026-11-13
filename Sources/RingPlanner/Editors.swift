@@ -15,9 +15,12 @@ struct TaskEditor: View {
             Form {
                 Section("The task") {
                     TextField("Actionable title", text: $task.title, axis: .vertical).lineLimit(2...4)
+                    ReferenceLinksView(text: task.notes)
                     TextField("Project / context", text: $task.context, prompt: Text("e.g. T1A · Presales"))
                     TextField("Supporting details", text: $task.notes, axis: .vertical).lineLimit(2...5)
+                    TaskAreaPicker(tags: $task.tags)
                     TaskTagEditor(tags: $task.tags, knownTags: store.knownTags)
+                    if !task.attachments.isEmpty { TaskImageAttachments(attachments: task.attachments, repository: store.repository) }
                 }
                 Section("Separate decisions") {
                     Picker("Importance", selection: Binding(get: { task.importance.map { $0 ? 1 : 2 } ?? 0 }, set: { task.importance = $0 == 0 ? nil : $0 == 1 })) { Text("Choose…").tag(0); Text("Important").tag(1); Text("Not important").tag(2) }
@@ -114,8 +117,8 @@ struct ReviewView: View {
                     Button { store.editingTask = t } label: { HStack { Text(t.title); Spacer(); Text("Review →").foregroundStyle(Theme.gold) } }.buttonStyle(.plain).font(Theme.body(13))
                 }
                 DividerLine()
-                reviewStep("02", title: "Inbox", detail: "\(store.inbox.count) tasks to review")
-                Button("Prioritize inbox →") { store.page = .matrix }.buttonStyle(.plain).foregroundStyle(Theme.gold)
+                reviewStep("02", title: "Inbox", detail: "\(store.inbox.count + store.sharedInbox.active.count) items to review")
+                Button("Open Inbox →") { store.page = .inbox }.buttonStyle(.plain).foregroundStyle(Theme.gold)
                 DividerLine()
                 reviewStep("03", title: "Next workday", detail: store.dayTitle(store.nextPlanningDay))
                 HStack(spacing: 14) {
@@ -143,20 +146,43 @@ struct PreferencesView: View {
                     TextField("IANA time zone", text: $settings.timeZone)
                     DetailNote("Time zone", "Work and routine windows use this time zone. Drafts never extend the working day.")
                 }
+                Section("Personal time") {
+                    MinutePicker(title: "Weekdays from", minute: personalMinute(\.weekdayStart))
+                    MinutePicker(title: "Weekdays until", minute: personalMinute(\.weekdayEnd))
+                    MinutePicker(title: "Weekends from", minute: personalMinute(\.weekendStart))
+                    MinutePicker(title: "Weekends until", minute: personalMinute(\.weekendEnd))
+                    DetailNote("Personal planning", "Personal tags use these windows, including weekends. Calendar commitments still block time. Change a task’s Work / Personal tag to correct AI categorization.")
+                }
                 Section("Planning") {
                     Stepper("Interruption reserve: \(settings.reservePercent)%", value: $settings.reservePercent, in: 0...50, step: 5)
                     Stepper("Focus block: \(settings.focusMinutes) minutes", value: $settings.focusMinutes, in: 25...90, step: 5)
                     Stepper("Default minimum block: \(settings.minimumFocusMinutes) minutes", value: $settings.minimumFocusMinutes, in: 5...50, step: 5)
                     DetailNote("Transition rules", "Transitions: related tasks 5m · project changes 10m · meeting preparation 5m · recovery 10m. Shared gaps are counted once.")
                 }
+                Section("Navigation") { Toggle("Group Routines, Daily review and History under More", isOn: Binding(get: { store.compactNavigation }, set: { store.compactNavigation = $0 })) }
+                if store.publicationDefaults.string(forKey: "workspace.restoredRoot") != nil {
+                    Section("Workspace selection") {
+                        Button("Return to the original workspace on next launch") {
+                            guard !store.library.recordingIsActive(), !store.library.saving else { store.error = "Finish recording and saves before changing workspaces."; return }
+                            store.publicationDefaults.removeObject(forKey: "workspace.restoredRoot"); store.publicationDefaults.removeObject(forKey: "workspace.restoredMeetings"); store.publicationDefaults.set(true, forKey: "workspace.restoreNeedsReview")
+                            store.showNotice("Original workspace selected · quit and reopen to switch.")
+                        }
+                    }
+                }
+                if store.publicationDefaults.bool(forKey: "workspace.restoreNeedsReview") {
+                    Section("Restored calendar data") {
+                        Text("Review the restored plans and pending calendar changes before allowing writes. Calendar sync starts disabled for this workspace.")
+                        Button("Allow saved calendar changes after review") { store.publicationDefaults.set(false, forKey: "workspace.restoreNeedsReview"); store.calendarConnection.resumeAfterRestoreReview(); store.objectWillChange.send() }
+                    }
+                }
+                TelegramSettingsSection(telegram: store.telegram)
+                LibrarySettingsSections(library: store.library)
                 Section("Completion") {
                     Toggle("Play a soft chime", isOn: Binding(get: { store.completionSoundEnabled }, set: { store.completionSoundEnabled = $0 }))
                 }
                 Section("Capture") {
                     LabeledContent("Quick capture shortcut", value: "Control + Option + Space")
-                    LabeledContent("Inbox recording shortcut", value: "Control + Option + R")
-                    Picker("Speech language", selection: $settings.speechLocale) { Text("English (US)").tag("en-US"); Text("Russian — validation pending").tag("ru-RU") }
-                    DetailNote("Voice capture details", "Microphone access is requested when you press Record or use the recording shortcut. Recognition stays on device; unsupported locales offer text input. Recordings stop after 60 seconds and audio is not saved.")
+
                 }
                 LiteLLMSettingsSection(settings: store.captureAI)
                 EventAlertSettingsSection(alerts: store.eventAlerts)
@@ -173,5 +199,8 @@ struct PreferencesView: View {
                 }
             }.formStyle(.grouped)
         }.padding(32).onAppear { settings = store.settings }
+    }
+    private func personalMinute(_ key: WritableKeyPath<PersonalAvailability, Int>) -> Binding<Int> {
+        Binding(get: { (settings.personalAvailability ?? PersonalAvailability())[keyPath: key] }, set: { value in var p = settings.personalAvailability ?? PersonalAvailability(); p[keyPath: key] = value; settings.personalAvailability = p })
     }
 }

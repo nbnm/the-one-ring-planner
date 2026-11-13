@@ -128,7 +128,8 @@ struct PlanTaskSelectionSheet: View {
         VStack(alignment: .leading, spacing: 10) {
             if let estimate {
                 HStack(alignment: .top, spacing: 24) {
-                    metric(estimate.committedTaskMinutes > 0 ? "Available for more tasks" : "Available for tasks", minutes: estimate.availableMinutes, color: Theme.gold)
+                    metric("Work available", minutes: estimate.availableMinutes, color: Theme.gold)
+                    metric("Personal available", minutes: estimate.personalAvailableMinutes, color: Theme.gold)
                     metric("Selected effort", minutes: estimate.selectedEffortMinutes, color: Theme.text)
                     metric("Fits in draft", minutes: estimate.scheduledEffortMinutes, color: Theme.green)
                     Spacer(minLength: 0)
@@ -198,7 +199,8 @@ struct PlanTaskSelectionSheet: View {
             breakdownRow("Transitions", estimate.transitionMinutes)
             breakdownRow("Interruption reserve", estimate.reserveMinutes)
             DividerLine()
-            breakdownRow("Available for more tasks", estimate.availableMinutes)
+            breakdownRow("Work available", estimate.availableMinutes)
+            breakdownRow("Personal available", estimate.personalAvailableMinutes)
             Text("Overlaps count once. Available time is measured before adding new task blocks. Flexible routines can yield to selected work; Fits in draft uses the full scheduling rules.").font(Theme.body(11)).foregroundStyle(Theme.secondary)
             if estimate.reserveShortfallMinutes > 0 {
                 Text("The day has \(store.duration(estimate.reserveShortfallMinutes)) less reserve than requested.").font(Theme.body(11)).foregroundStyle(Theme.alert)

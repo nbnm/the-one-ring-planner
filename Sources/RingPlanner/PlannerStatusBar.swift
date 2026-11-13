@@ -19,6 +19,15 @@ struct PlannerStatusBar: View {
                 values.append(Issue(title: title, detail: detail, page: page))
             }
         }
+        add("Inbox needs attention", store.sharedInbox.error, .inbox)
+        add("Inbox AI needs attention", store.sharedInbox.jobs.first(where: { $0.lastError != nil })?.lastError, .inbox)
+        add("Library needs attention", store.library.error, .library)
+        add("Library AI needs attention", store.library.jobs.first(where: { $0.lastError != nil })?.lastError, .settings)
+        add("Telegram needs attention", store.telegram.error, .settings)
+        add("Telegram alerts need attention", store.telegram.notificationError, .settings)
+        add("Telegram capture needs attention", store.telegram.state.jobs.first(where: { $0.lastError != nil })?.lastError, .settings)
+        add("Telegram send needs attention", store.telegram.state.outbox.first(where: { $0.lastError != nil })?.lastError, .settings)
+        add("Data backup needs attention", store.library.backupState.lastError, .settings)
         add("Calendar sync needs attention", store.calendarScheduleError, .calendar)
         add("Calendar could not load", store.calendarDisplayError, .calendar)
         add("Calendar connection needs attention", store.calendarConnection.message, .settings)
@@ -70,7 +79,7 @@ struct PlannerStatusBar: View {
             }
         }
         .font(Theme.body(10)).padding(.horizontal, 16).frame(height: 30)
-        .background(Theme.sidebar.opacity(0.6)).overlay(alignment: .top) { DividerLine() }
+        .background(Theme.statusSurface.opacity(0.6)).overlay(alignment: .top) { DividerLine() }
         .popover(isPresented: $showingDetails, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack { Text("Status").font(Theme.body(14, weight: .semibold)); Spacer(); Button { showingDetails = false } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("Close status messages") }

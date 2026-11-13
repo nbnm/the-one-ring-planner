@@ -10,6 +10,7 @@ public struct PlanningPreview {
     public let transitionMinutes: Int
     public let reserveMinutes: Int
     public let reserveShortfallMinutes: Int
+    public let personalAvailableMinutes: Int
     public let availableMinutes: Int
     public let selectedEffortMinutes: Int
     public let scheduledEffortMinutes: Int
@@ -43,12 +44,17 @@ public struct PlanningPreview {
         reserveMinutes = min(free, baseline.reserveMinutes)
         reserveShortfallMinutes = max(0, baseline.reserveMinutes - reserveMinutes)
         availableMinutes = max(0, free - reserveMinutes)
+        let personal = settings.taskWindow(.personal, on: day)
+        let pStart = PlannerDate.at(personal.start, on: day, settings: settings), pEnd = PlannerDate.at(personal.end, on: day, settings: settings)
+        let pAvailable = calendar.startOfDay(for: day) < calendar.startOfDay(for: now) ? pEnd : calendar.isDate(day, inSameDayAs: now) ? min(pEnd, max(pStart, roundedNow)) : pStart
+        personalAvailableMinutes = max(0, Int(pEnd.timeIntervalSince(pAvailable) / 60) - Self.occupied(baseline.blocks, start: pAvailable, end: pEnd))
         let ids = selectedTaskIDs.map(Set.init)
         let selected = tasks.filter { $0.isEligible && $0.quadrant != .reconsider && (ids?.contains($0.id) ?? true) }
         let chosen = Set(selected.map(\.id))
         selectedEffortMinutes = selected.reduce(0) { $0 + ($1.remainingMinutes ?? 0) }
         scheduledEffortMinutes = selected.reduce(0) { sum, task in
-            let held = proposed.blocks.filter { $0.taskID == task.id && ($0.state == .planned || $0.state == .running) && $0.start < end && $0.end > availableStart }.reduce(0) { $0 + max(0, Int(min($1.end, end).timeIntervalSince(max($1.start, availableStart)) / 60)) }
+            let taskStart = task.area == .personal ? pAvailable : availableStart, taskEnd = task.area == .personal ? pEnd : end
+            let held = proposed.blocks.filter { $0.taskID == task.id && ($0.state == .planned || $0.state == .running) && $0.start < taskEnd && $0.end > taskStart }.reduce(0) { $0 + max(0, Int(min($1.end, taskEnd).timeIntervalSince(max($1.start, taskStart)) / 60)) }
             return sum + min(task.remainingMinutes ?? 0, held)
         }
         unscheduledTasks = proposed.unscheduled.filter { chosen.contains($0.id) }

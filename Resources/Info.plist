@@ -15,20 +15,20 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.23.2</string>
+	<string>0.28.2</string>
 	<key>CFBundleVersion</key>
-	<string>37</string>
+	<string>46</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Capture Inbox thoughts and record your microphone for meetings only when you press Record. Meeting audio is saved locally until you choose to process or remove it.</string>
+	<string>Record your microphone for meetings only when you press Record in The Eye. Meeting audio is saved locally until you choose to process or remove it.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Record system audio from your Mac for meetings. Only audio is saved locally.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Transcribe explicit Inbox voice captures and saved English or Russian meeting recordings on this Mac.</string>
+	<string>Transcribe saved English or Russian meeting recordings on this Mac.</string>
 </dict>
 </plist>

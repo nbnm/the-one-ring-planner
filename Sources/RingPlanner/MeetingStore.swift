@@ -92,7 +92,6 @@ import RingCore
         guard save(record) else { return }
         selectedID = record.id; activeID = record.id; showSetup = false; error = nil; stopPlayback()
         AppActions.prepareMeetingCapture()
-        SpeechCapture.microphoneReservedForMeeting = source.includesMicrophone
         captureTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -106,7 +105,7 @@ import RingCore
                 var item = recordings.first { $0.id == record.id } ?? record
                 item.duration = max(item.duration, recorder.elapsed)
                 item.state = .interrupted; item.endedAt = Date(); item.lastError = error is CancellationError ? "Recording cancelled. Any captured audio is preserved." : error.localizedDescription
-                _ = save(item); activeID = nil; SpeechCapture.microphoneReservedForMeeting = false
+                _ = save(item); activeID = nil
             }
         }
     }
@@ -115,7 +114,6 @@ import RingCore
         finishing = true; checkpoint?.invalidate(); checkpoint = nil
         captureTask?.cancel(); recorder.cancelPreparation(); await captureTask?.value; captureTask = nil
         let stats = await recorder.stop()
-        SpeechCapture.microphoneReservedForMeeting = false
         if var record = recordings.first(where: { $0.id == id }) {
             record.duration = max(record.duration, stats.duration); record.endedAt = Date()
             record.state = reason == nil && record.duration > 0 ? .recorded : .interrupted

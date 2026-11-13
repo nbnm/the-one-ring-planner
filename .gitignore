@@ -24,3 +24,9 @@ Local/
 Meetings/
 Signing/
 __pycache__/
+
+# Optional hosted Library inbox deployment files and local tooling.
+services/**/node_modules/
+services/**/.wrangler/
+services/**/.dev.vars*
+services/**/wrangler.toml

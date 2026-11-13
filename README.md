@@ -4,7 +4,7 @@
 
 A native macOS planner that brings tasks, routines, Google Calendar and meeting notes into one quiet workspace. Built with Swift, SwiftUI and AppKit, plus a small Objective-C audio bridge, with no third-party package dependencies.
 
-**Current version:** 0.23.2 · Personal desktop application · macOS 14+
+**Current version:** 0.28.2 · Personal desktop application · macOS 14+
 
 ![Today’s plan with fictional Hobbit tasks and an Inbox](docs/screenshots/today.jpg)
 
@@ -12,7 +12,7 @@ All screenshots use an isolated, fictional Middle-earth workspace. No personal t
 
 ## What it does
 
-- **Capture and prioritize:** text or voice capture, editable AI cleanup, project tags, and a four-quadrant matrix. Drag tasks between quadrants, change priorities, or expand a quadrant to focus.
+- **Capture and arrange:** a shared Inbox for text, links and multiple images, advisory AI Task/Note suggestions, searchable tags, and a four-quadrant matrix. Drag tasks between quadrants, change priorities, or expand a quadrant to focus.
 - **Plan a realistic day:** work hours, lunch, meetings, routines, transitions, focus blocks and reserve all count toward capacity. Daily review prepares the next working day, skipping weekends: Friday plans target Monday. Choose its tasks before confirming the plan.
 - **Find time in Google Calendar:** Q2 suggests an available slot; accept it or choose another on the calendar. Drag or resize scheduled tasks and routines, with changes synced to Google. Tasks are red; routines are green.
 - **Build routines:** daily, weekdays, weekends or selected days, with flexible/protected placement and small completion celebrations.
@@ -21,6 +21,12 @@ All screenshots use an isolated, fictional Middle-earth workspace. No personal t
 - **Stay nearby:** a colored ring in the menu bar, recording controls, global capture shortcuts and optional alerts one minute before events.
 
 In **Today**, click a task’s circle to complete the whole task. Completed tasks appear below the schedule, with an option to mark them incomplete and return them to their priority quadrant. **Task actions → Move to backlog** removes unfinished work from saved schedules while keeping its priority, estimate and details. Completion shows a brief gold check animation with Undo and a soft chime; turn the sound off in **Settings → Completion**. Reduce Motion is respected, and the chime stays quiet during meeting or Inbox recording. Published Google changes still require plan confirmation.
+
+**New in 0.26.0: [Shared Inbox](docs/library/shared-inbox.md).** Capture first, then drag into a quadrant to create a task or into Library to create a note. AI suggests the type and tags; your destination wins. Links are clickable and copy controls use small icons.
+
+**Also included:** Shire-inspired parchment and green navigation, multi-image clipboard capture for tasks and notes, and automatic AI categorization. Task microphone recording and its shortcut are removed; meeting recording stays in The Eye.
+
+**[Personal Library](docs/library/README.md).** Save images, prompts, Markdown, skills and URLs without creating tasks. Capture has independent Task / Note drafts. Library includes a gallery/list, exact copying, editing, recoverable Trash, local OCR/keyword search, automatic AI organization and verified embedding search, private GitHub backup and isolated restore. An optional [Telegram inbox service](services/telegram-inbox/README.md) receives references while the Mac sleeps. External services require explicit setup; the demo stays local.
 
 ## A quick tour
 
@@ -149,7 +155,7 @@ Google time changes are read on activation, manual refresh and every five minute
 4. Use a diarization-capable model for individual speaker labels. `whisper-1` uses timestamped transcription without individual speaker separation. Catalog names alone do not prove the gateway supports a feature.
 5. Choose processing explicitly and review the gateway/model information before uploading. Review extracted tasks before adding them to Inbox.
 
-Meeting audio stays local until cloud processing is chosen. That sends audio to the saved gateway, followed by transcript analysis through its text model. Text-only analysis sends the saved transcript without audio. Task cleanup sends the capture and tag names. Retention and model routing depend on your gateway.
+Meeting audio stays local until cloud processing is chosen. That sends audio to the saved gateway, followed by transcript analysis through its text model. Text-only analysis sends the saved transcript without audio. Task cleanup sends the capture, tag names and attached image thumbnails to the saved model. Choose a vision-capable task alias for image interpretation. Retention and model routing depend on your gateway.
 
 Long meetings are processed in short audio chunks with bounded retries and saved checkpoints. An hour of synthetic audio is covered by local tests; recognition quality and live processing speed depend on the chosen model, gateway and recording. Speaker aliases are per meeting and explicitly assigned.
 
@@ -158,8 +164,7 @@ Long meetings are processed in short audio chunks with bounded retries and saved
 | Action | Control |
 | --- | --- |
 | Quick capture | **Control + Option + Space** |
-| Review capture | **Command + Return** |
-| Start/stop Inbox dictation | **Control + Option + R**, or Inbox microphone |
+| Save Inbox capture / confirm explicit task review | **Command + Return** |
 | Record a meeting | Ring menu → **Record meeting…**, or The Eye |
 | Stop/save a meeting | Ring menu or recording-only Eye menu |
 | Return from expanded quadrant | **Escape** / **Back to matrix** |
@@ -186,10 +191,12 @@ Keys and Google tokens stay in macOS Keychain and are not part of a file backup.
 ## Development and verification
 
 ```sh
-./scripts/test.sh                   # 157 deterministic core checks
-./scripts/test-voice.sh             # controlled voice lifecycle checks
+./scripts/test.sh                   # 200 deterministic core checks
+./scripts/test-voice.sh             # legacy voice regression fixture (not part of the app)
 ./scripts/test-meetings.sh          # 45 generated-audio/playback/capture checks
 ./scripts/test-audio-input.sh       # 11 native-format, route-recovery and exception-safety checks
+./scripts/test-telegram-audio.sh    # 8 generated Ogg/Opus chunking checks; FFmpeg required
+./scripts/test-library.sh           # 16 clipboard/media/OCR + 9 mocked hosted-inbox checks; Node 22.13+
 swift build                        # compile the native app
 ```
 
@@ -205,3 +212,45 @@ Optional `./scripts/test-speech-integration.sh` and `./scripts/test-meetings.sh 
 | `docs` | Screenshots, implementation notes and detailed feature reference |
 
 See [the feature reference](docs/feature-reference.md) and [implementation notes](docs/implementation.md) for detailed behavior and limitations. Artwork is AI-generated, with prompts retained under `docs/artwork`. This is an unofficial fan-inspired project and is not affiliated with the creators or owners of The Lord of the Rings.
+
+### Work and Personal tasks
+
+Captures use the saved LiteLLM connection to suggest exactly one **Work** or **Personal** tag, alongside project/topic tags. Each task in a mixed capture is classified independently. Change the category in task details or capture review; use the tag filter to show either category in the same inventory and priority matrix. Existing unclassified tasks retain their previous work scheduling behavior; they are not bulk-sent to AI.
+
+Personal tasks use the **Personal time** windows in Settings (default: weekdays 18:00–21:00, weekends 10:00–20:00). Day planning and Q2 suggestions check real calendar commitments in those windows. Personal tasks can be planned on weekends; explicit Work tasks stay on working days in automatic day plans. Manual calendar choices remain available. Accepted events use the existing Google Calendar destination and sync flow. A failed AI call preserves the saved item for manual correction.
+
+### Library folders
+
+Use the folder menu in Library to create folders or nested paths such as `Shire/Recipes`, rename folders, or reveal them in Finder. Move a note with its folder selector or **Move to folder** menu. New notes use the selected folder. All folders and Unfiled views remain available, and search respects the selected folder and its descendants.
+
+Folders are real directories under the data workspace’s `Data/notes/` directory. Notes remain lossless JSON records named by their stable IDs, for example `Data/notes/Shire/Recipes/<note-id>.json`; attachments remain in the shared content-addressed `note-assets/` directory. Folder moves retain note IDs, original captures, attachments and Git history. Empty folders are recorded in `settings/library-folders.json` and recreated on restore. Private Git backups and independent archives include nested folders. Organize and rename through the app; direct filesystem moves are not imported automatically.
+
+### Automatic private GitHub backup
+
+Settings → Data & backup supports **GitHub CLI · existing login**, as well as a token saved in Keychain. With GitHub CLI installed (`brew install gh`), sign in once using `gh auth login` and select that method when enabling a private data remote. The app reuses that login in memory without copying its token into another credential store. Logging out of GitHub CLI pauses uploads; local saves continue.
+
+Backup sends the data repository and its existing Git history: active and completed tasks, completion snapshots, original captures, plans, routines, notes and their folders, and attached images. Meeting audio, OAuth/LLM credentials, local connection settings and signing keys are outside that repository. Every task or note save schedules a backup after a short idle period. Startup and a periodic check also retry outstanding changes. The app checks that the destination is private before each push and verifies the remote commit afterward. Concurrent remote changes pause backup instead of force-pushing. See **Last verified remote backup** in Settings for the last confirmed upload.
+
+### Private Telegram bot · direct polling
+
+1. Create a dedicated bot with Telegram’s **@BotFather**, or use your existing bot. In the planner, open **Settings → Telegram → Connection**, paste its token, and choose **Connect bot**. The token is stored in macOS Keychain. If that bot has an existing webhook, the app asks you to replace it; pending updates are retained.
+2. Send the displayed `/pair …` command to the bot in your **private** Telegram chat within ten minutes. Pairing binds the bot to your numeric sender/chat ID. Group messages, other senders and unpaired commands are ignored and never imported or answered. A bot username can still be discovered on Telegram; access to planner data is restricted to the paired owner.
+3. Set **Poll every … seconds** (5–300; default 15) and save preferences. Polling runs in the Mac app with its window closed, while the Mac is awake and the app is running. Telegram retains updates for up to 24 hours; leave the app running regularly. No webhook or hosted service is needed for this mode.
+
+Text, links, photos, captions, documents, audio and other media messages become shared Inbox captures. Each Telegram message keeps its own capture identity; duplicate deliveries/restarts do not create duplicate Inbox items. Files up to 20 MB are supported by Telegram's standard download API and the app's attachment limit. Unrecognized document types are retained as binary attachments with their original names. Attachments can be revealed in Finder from the Inbox reader. Unsupported message kinds are captured as message metadata rather than executed.
+
+Voice/audio notes preserve their original audio with the Inbox capture and use the configured transcription alias, falling back to **The Eye** audio model. Install FFmpeg (`brew install ffmpeg`) for Telegram Ogg/Opus and other audio formats. Audio up to two hours is converted to bounded three-minute AAC chunks. Successful chunk transcripts are checkpointed; network/model failures keep the capture and can be retried in Telegram settings or from Inbox. Automatic language detection supports Russian/English when the selected model supports them. Independent task suggestions can be split into multiple Inbox items; the original audio and full transcript remain in the archived source capture. Suggestions never enter quadrants or calendars until you place them yourself. Switching the transcription alias before retrying invalidates partial text from the previous model.
+
+Commands: `/help`, `/today`, `/tomorrow`, `/next`, `/tasks [page]`, `/work [page]`, `/personal [page]`, `/task ID`, `/find words`, `/inbox [page]`, `/status`. Queries use the current day in the planner's time zone, independently of the date open in the app. Task commands are read-only; plan replies identify drafts. New commands can be answered while an audio job is processing.
+
+Daily plan digests, Q1 task notifications and event alerts are opt-in in **Digests & alerts**. Daily digests send once after the selected local time while the app is running. Event alerts require polling every 30 seconds or faster and are checked approximately one minute before confirmed events. Expired alerts are dropped. Confirmed sends are tracked across restarts. Telegram has no sendMessage idempotency key: an unconfirmed send is paused for review rather than automatically duplicated; **Retry unconfirmed sends** explains that a duplicate is possible. Rate-limited sends retry after Telegram's requested delay.
+
+The bot token, paired chat ID, polling cursor and pending processing/delivery queue stay in the workspace's local state/Keychain, outside Git backup. Imported Inbox captures, original audio/files and derived transcripts are included in the existing private data backup. The earlier hosted Library-inbox implementation remains available in source for compatibility; its automatic poll loop is disabled in favor of the direct shared-Inbox integration.
+
+### Telegram appearance
+
+**Settings → Telegram → Appearance → Update bot profile** applies the app's gold ring on a pine-green avatar, the display name **The One Ring Planner**, and English/Russian profile descriptions. The existing bot username and owner pairing are preserved. Telegram confirms the name, About text and photo after the update. The official Bot API supports profile branding; private-chat wallpaper and bubble colors are controlled by Telegram clients.
+
+A matching original Shire wallpaper is saved at `docs/telegram/shire-chat-wallpaper.jpg`. Set it through Telegram's chat appearance/wallpaper controls if desired. The avatar source is `Sources/RingPlanner/Assets/TelegramAvatar.jpg`; both assets can be rebuilt with `swift scripts/GenerateTelegramArtwork.swift /absolute/path/to/the-one-ring-planner` using the existing app ring artwork. No user tasks or screenshots appear in these images.
+
+Telegram replies use bold headings, bold task titles/time ranges, short ID/command code styling and a few context-specific emojis. Formatting escapes all captured/task text before applying Telegram HTML and caps messages by UTF-16 length without cutting a grapheme. **Telegram → Appearance → Send message preview** sends a clearly marked fictional example to the paired private chat.

@@ -19,6 +19,11 @@ struct PriorityDropRegionsKey: PreferenceKey {
     }
 }
 
+struct LibraryDropRegionsKey: PreferenceKey {
+    static let defaultValue: [CGRect] = []
+    static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) { value += nextValue() }
+}
+
 /// Local pointer tracking keeps moves inside the planner, without an OS pasteboard session.
 struct TaskDragTitle: View {
     @EnvironmentObject var store: PlannerStore
@@ -60,8 +65,8 @@ private struct TaskDragSurface: NSViewRepresentable {
     func updateNSView(_ view: DragView, context: Context) {
         view.open = open; view.move = move; view.finish = finish; view.cancel = cancel
         view.setAccessibilityLabel(title)
-        view.setAccessibilityHelp("Drag this title or grip to a priority quadrant. Activate to edit.")
-        view.toolTip = "Drag this title or grip to a quadrant. Click to edit."
+        view.setAccessibilityHelp("Drag to a priority quadrant or Library. Activate to open.")
+        view.toolTip = "Drag to a quadrant or Library. Click to open."
     }
 
     final class DragView: NSView {

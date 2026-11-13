@@ -20,7 +20,8 @@ public enum TaskSlotPlanner {
         })).sorted(by: >)
     }
     public static func suggestions(task: PlannerTask, minutes: Int, day: Date, now: Date, tasks: [PlannerTask], routines: [Routine], settings s: PlanningSettings, meetings: [PlanBlock], previous: DayPlan?, notBeforeMinute: Int, excluding: Set<String> = [], limit: Int = 3, reserveIsHardLimit: Bool = true, calendarBusy: [PlanBlock] = []) -> [TaskTimeSlot] {
-        let start = PlannerDate.at(s.workStart, on: day, settings: s), end = PlannerDate.at(s.workEnd, on: day, settings: s)
+        let window = s.taskWindow(task.area, on: day)
+        let start = PlannerDate.at(window.start, on: day, settings: s), end = PlannerDate.at(window.end, on: day, settings: s)
         let lower = max(start, now, task.earliestStart ?? start, PlannerDate.at(notBeforeMinute, on: day, settings: s))
         let upper = min(end, task.deadline ?? end)
         guard minutes >= 5, minutes <= 1440 else { return [] }
@@ -50,7 +51,7 @@ public enum TaskSlotPlanner {
             for i in prior!.blocks.indices where prior!.blocks[i].kind == .routine { prior!.blocks[i].pinned = true }
         }
         let baseline = Scheduler().reservingPlan(day: day, now: now, tasks: tasks, routines: routines, settings: s, meetings: meetings, previous: prior)
-        var busy = (baseline.blocks + (prior?.blocks ?? [])).filter { $0.kind != .transition && ($0.state == .planned || $0.state == .running) } + calendarBusy
+        var busy = (baseline.blocks + (prior?.blocks ?? [])).filter { $0.kind != .transition && ($0.state == .planned || $0.state == .running) } + meetings + calendarBusy
         let closed = Set((previous?.blocks ?? []).filter { $0.state != .planned && $0.state != .running }.map(\.id))
         for e in previous?.publication?.desired ?? [] where previous?.publication?.missingEventIDs?.contains(e.id) != true && !closed.contains(e.blockID) {
             guard e.taskID == nil || tasks.first(where: { $0.id == e.taskID })?.isEligible == true else { continue }
@@ -68,9 +69,13 @@ public enum TaskSlotPlanner {
         if let deadline = task.deadline, slot.end > deadline { blocked.append("This ends after the task’s deadline.") }
         let c = PlannerDate.calendar(s), dayStart = c.startOfDay(for: slot.start), dayEnd = c.date(byAdding: .day, value: 1, to: dayStart)!
         if slot.end > dayEnd { blocked.append("Choose a block within one calendar day.") }
-        let start = PlannerDate.at(s.workStart, on: slot.start, settings: s), end = PlannerDate.at(s.workEnd, on: slot.start, settings: s)
-        if slot.start < start || slot.end > end { if manual { warnings.append("Outside your usual work hours.") } else { blocked.append("Outside work hours.") } }
-        if manual && c.isDateInWeekend(slot.start) { warnings.append("This is a weekend.") }
+        let window = s.taskWindow(task.area, on: slot.start)
+        let start = PlannerDate.at(window.start, on: slot.start, settings: s), end = PlannerDate.at(window.end, on: slot.start, settings: s)
+        if slot.start < start || slot.end > end {
+            let label = task.area == .personal ? "personal" : "work"
+            if manual { warnings.append("Outside your usual \(label) hours.") } else { blocked.append("Outside \(label) hours.") }
+        }
+        if manual && task.area == .work && c.isDateInWeekend(slot.start) { warnings.append("This is a weekend.") }
         let busy = context.busy
         let overlaps = busy.filter { $0.start < slot.end && $0.end > slot.start }
         if !overlaps.isEmpty { blocked.append("Overlaps " + Array(Set(overlaps.map(\.title))).sorted().prefix(3).joined(separator: ", ") + ".") }
@@ -83,7 +88,7 @@ public enum TaskSlotPlanner {
         var occupied = busy + [PlanBlock(id: "candidate", title: task.title, kind: .focus, start: slot.start, end: slot.end)]
         if preparation > 0 { occupied.append(PlanBlock(id: "before", title: "Transition", kind: .transition, start: slot.start.addingTimeInterval(-Double(preparation * 60)), end: slot.start)) }
         if recovery > 0 { occupied.append(PlanBlock(id: "after", title: "Transition", kind: .transition, start: slot.end, end: slot.end.addingTimeInterval(Double(recovery * 60)))) }
-        if unionMinutes(occupied, start: start, end: end) > context.baseline.workMinutes - context.baseline.reserveMinutes {
+        if task.area == .work && unionMinutes(occupied, start: start, end: end) > context.baseline.workMinutes - context.baseline.reserveMinutes {
             if reserveIsHardLimit { blocked.append("Uses the day’s interruption reserve.") } else { warnings.append("Uses interruption reserve normally kept free in automatic day plans.") }
         }
         return TaskSlotAssessment(blocking: blocked, warnings: warnings)

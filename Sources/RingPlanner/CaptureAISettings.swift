@@ -16,21 +16,30 @@ import RingCore
         hasKey = SecItemCopyMatching([kSecClass: kSecClassGenericPassword, kSecAttrService: service,
             kSecAttrAccount: "capture-key", kSecReturnAttributes: true, kSecMatchLimit: kSecMatchLimitOne] as CFDictionary, &result) == errSecSuccess
     }
-    func apiKey() async throws -> String {
+    func apiKey() async throws -> String { try await secret(account: "capture-key") }
+    func secret(account: String) async throws -> String {
         let keyService = service
         // Keychain can wait for a security prompt. Keep that wait off the UI thread.
         let task = Task.detached {
             var result: CFTypeRef?
             let status = SecItemCopyMatching([kSecClass: kSecClassGenericPassword, kSecAttrService: keyService,
-                kSecAttrAccount: "capture-key", kSecReturnData: true, kSecMatchLimit: kSecMatchLimitOne] as CFDictionary, &result)
+                kSecAttrAccount: account, kSecReturnData: true, kSecMatchLimit: kSecMatchLimitOne] as CFDictionary, &result)
             guard status == errSecSuccess, let data = result as? Data, let key = String(data: data, encoding: .utf8) else {
-                throw CaptureProcessingError.configuration("Add your LiteLLM key in Settings, or allow access to its macOS Keychain entry.")
+                throw CaptureProcessingError.configuration(account == "capture-key" ? "Add your LiteLLM key in Settings, or allow access to its macOS Keychain entry." : "Save the service token in its Library connection settings, or allow access to its macOS Keychain entry.")
             }
             return key
         }
         let key = try await task.value
         try Task.checkCancellation()
         return key
+    }
+    func saveSecret(_ value: String, account: String) throws {
+        guard !value.isEmpty else { return }
+        let query = [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account] as CFDictionary
+        let bytes = Data(value.utf8)
+        var status = SecItemUpdate(query, [kSecValueData: bytes] as CFDictionary)
+        if status == errSecItemNotFound { status = SecItemAdd([kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account, kSecValueData: bytes, kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly] as CFDictionary, nil) }
+        guard status == errSecSuccess else { throw LibraryError.invalid("The service token could not be saved in Keychain.") }
     }
     func save(_ value: LiteLLMConnection, key: String) throws {
         _ = try value.endpoint()

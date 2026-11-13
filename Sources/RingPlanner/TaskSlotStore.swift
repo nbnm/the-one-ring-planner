@@ -59,7 +59,7 @@ extension PlannerStore {
             guard var publication = original.publication else { return original }
             let events = read.events.filter { $0.managedByPlanner && $0.calendarID == publication.destination.id }
             let times = events.map { CalendarEventTime(id: $0.sourceEventID, start: $0.start, end: $0.end) }
-            var p = CalendarSchedule.reconciling(original, times: times, settings: settings, includingPending: true).plan
+            var p = CalendarSchedule.reconciling(original, times: times, settings: settings, includingPending: true, tasks: tasks).plan
             publication = p.publication!
             let visible = Set(events.map(\.sourceEventID))
             let missing = publication.desired.filter { $0.start < read.interval.end && $0.end > read.interval.start && !visible.contains($0.id) }
@@ -91,7 +91,7 @@ extension PlannerStore {
         for offset in 0..<14 {
             try Task.checkCancellation()
             let date = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: day))!
-            if !weekends && calendar.isDateInWeekend(date) { continue }
+            if request.task.area == .work && !weekends && calendar.isDateInWeekend(date) { continue }
             examined += 1
             guard snapshot == settings, tasks.first(where: { $0.id == request.task.id })?.revision == request.task.revision else { throw TaskSlotError.changed }
             let context = slotContext(day: date, read: read)

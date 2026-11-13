@@ -1,0 +1,26 @@
+name = "one-ring-private-inbox"
+main = "worker.mjs"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+[vars]
+MAX_PENDING_CAPTURES = "1000"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "one-ring-library-inbox"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[[r2_buckets]]
+binding = "ASSETS"
+bucket_name = "one-ring-library-inbox-assets"
+
+[[queues.producers]]
+binding = "QUEUE"
+queue = "one-ring-library-ingest"
+
+[[queues.consumers]]
+queue = "one-ring-library-ingest"
+max_batch_size = 10
+max_retries = 10
+dead_letter_queue = "one-ring-library-ingest-dead-letter"

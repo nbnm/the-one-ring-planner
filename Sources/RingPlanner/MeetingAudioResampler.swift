@@ -1,4 +1,5 @@
 import AVFoundation
+import RingCore
 
 /// Keep filter state across packets. Converted packets use the output clock;
 /// converter latency must not become a silence gap at every input callback.
@@ -32,14 +33,14 @@ final class MeetingAudioResampler {
         return result
     }
     private func convert(_ input: AVAudioPCMBuffer?, capacity: AVAudioFrameCount) throws -> (AVAudioPCMBuffer, Double)? {
-        guard let converter, let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { throw VoiceCaptureError.conversion }
+        guard let converter, let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { throw MeetingError.validation("Could not convert meeting audio. The original recording is preserved.") }
         var supplied = false, error: NSError?
         let state = converter.convert(to: output, error: &error) { _, status in
             if input == nil { status.pointee = .endOfStream; return nil }
             status.pointee = supplied ? .noDataNow : .haveData
             defer { supplied = true }; return supplied ? nil : input
         }
-        if state == .error { throw error ?? VoiceCaptureError.conversion as NSError }
+        if state == .error { throw error ?? MeetingError.validation("Could not convert meeting audio. The original recording is preserved.") as NSError }
         guard output.frameLength > 0 else { return nil }
         let time = nextTime; nextTime += Double(output.frameLength) / 16000
         return (output, time)

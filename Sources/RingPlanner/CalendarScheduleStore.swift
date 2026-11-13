@@ -22,7 +22,7 @@ extension PlannerStore {
                 var reading = original.publication!; reading.desired.removeAll { held.contains($0.id) }
                 let times = try await googleCalendar.eventTimes(reading, skippingRemoved: true)
                 guard calendarConnection.enabled, settings == settingsSnapshot, !publishingCalendar else { throw CalendarConnectionError.changedDuringRead }
-                let merged = CalendarSchedule.reconciling(original, times: times, settings: settingsSnapshot, includingPending: true)
+                let merged = CalendarSchedule.reconciling(original, times: times, settings: settingsSnapshot, includingPending: true, tasks: tasks)
                 var plan = merged.plan
                 let found = Set(times.map(\.id)), absent = original.publication!.desired.map(\.id).filter { !found.contains($0) && !held.contains($0) }.sorted()
                 plan.publication!.missingEventIDs = absent.isEmpty ? nil : absent

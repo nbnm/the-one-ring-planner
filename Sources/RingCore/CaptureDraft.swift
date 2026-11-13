@@ -26,7 +26,7 @@ public enum CaptureDraftError: LocalizedError {
 public struct ReviewedCapture {
     public let tasks: [PlannerTask]
     public let capture: Capture
-    public init(source: String, drafts: [CaptureDraft], settings: PlanningSettings, knownTags: [String] = [], replacing original: PlannerTask? = nil, now: Date = Date()) throws {
+    public init(source: String, drafts: [CaptureDraft], settings: PlanningSettings, knownTags: [String] = [], replacing original: PlannerTask? = nil, attachments: [LibraryAttachment] = [], now: Date = Date()) throws {
         let selected = drafts.filter(\.included)
         guard !selected.isEmpty else { throw CaptureDraftError.noSelection }
         guard selected.count <= 12 else { throw CaptureDraftError.tooManyTasks }
@@ -35,16 +35,19 @@ public struct ReviewedCapture {
             var task = PlannerTask(title: draft.title.trimmingCharacters(in: .whitespacesAndNewlines),
                                    notes: draft.notes.trimmingCharacters(in: .whitespacesAndNewlines),
                                    tags: TaskTags.normalize(draft.tags, known: knownTags), now: now)
+            task.attachments = attachments
             task.minimumBlockMinutes = settings.minimumFocusMinutes
             return task
         }
         if var original {
             guard original.state == .inbox else { throw CaptureDraftError.existingTaskNotInbox }
+            original.attachments = attachments.isEmpty ? original.attachments : attachments
             original.title = tasks[0].title; original.notes = tasks[0].notes; original.tags = tasks[0].tags
             original.updatedAt = now; original.revision += 1
             tasks[0] = original
         }
-        let capture = Capture(text: source, timeZone: settings.timeZone, taskIDs: tasks.map(\.id), now: now)
+        var capture = Capture(text: source, timeZone: settings.timeZone, taskIDs: tasks.map(\.id), now: now)
+        if !attachments.isEmpty { capture.attachments = attachments }
         for index in tasks.indices { tasks[index].sourceCaptureID = capture.id }
         self.tasks = tasks; self.capture = capture
     }

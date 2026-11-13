@@ -26,6 +26,7 @@ struct PriorityReviewSheet: View {
                 Section("Task") {
                     TextField("Actionable title", text: $task.title, axis: .vertical).lineLimit(1...3)
                     TextField("Project / context", text: $task.context)
+                    TaskAreaPicker(tags: $task.tags)
                     TaskTagEditor(tags: $task.tags, knownTags: store.knownTags)
                 }
                 Section("Duration estimate") {
@@ -60,7 +61,7 @@ struct PriorityReviewSheet: View {
                     Button("Cancel") { dismiss() }.buttonStyle(QuietButton()).keyboardShortcut(.cancelAction)
                     Spacer()
                     Button(task.quadrant.map { "Move to Q\($0.rawValue)" } ?? "Confirm priority") {
-                        if store.commitPriority(task, expectedRevision: request.originalRevision) { dismiss() }
+                        if (request.inboxItem.map { store.commitInboxPriority(task, item: $0) } ?? store.commitPriority(task, expectedRevision: request.originalRevision)) { dismiss() }
                     }.buttonStyle(GoldButton()).disabled(!missing.isEmpty).keyboardShortcut(.defaultAction)
                 }
             }.padding(24)

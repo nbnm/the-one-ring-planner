@@ -26,7 +26,11 @@ public struct Scheduler {
         let dueRoutines = routines.filter { $0.occurs(on: day, settings: s) }
         var warnings: [String] = []
         var omitted: [Unscheduled] = []
-        var blocks = meetings.filter { $0.end > start && $0.start < end }
+        let personalWindow = s.taskWindow(.personal, on: day)
+        let personalStart = PlannerDate.at(personalWindow.start, on: day, settings: s), personalEnd = PlannerDate.at(personalWindow.end, on: day, settings: s)
+        let hasPersonal = tasks.contains { $0.area == .personal && $0.isEligible }
+        let visibleStart = hasPersonal ? min(start, personalStart) : start, visibleEnd = hasPersonal ? max(end, personalEnd) : end
+        var blocks = meetings.filter { $0.end > visibleStart && $0.start < visibleEnd }
         if s.lunchMinutes > 0 {
             blocks.append(.init(id: "\(key)-lunch", title: "Lunch & a proper pause", kind: .lunch, start: PlannerDate.at(s.lunchStart, on: day, settings: s), end: PlannerDate.at(s.lunchStart + s.lunchMinutes, on: day, settings: s)))
         }
@@ -63,7 +67,7 @@ public struct Scheduler {
         let reserve = (max(0, workMinutes - fixedMinutes) * s.reservePercent / 100 / 5) * 5
         let budget = max(0, workMinutes - reserve)
         var serial = 0
-        func place(id: String, title: String, context: String, kind: BlockKind, duration: Int, minimum: Int, split: Bool, windowStart: Date, windowEnd: Date, taskID: String? = nil, routineID: String? = nil, protected: Bool = false) -> Int {
+        func place(id: String, title: String, context: String, kind: BlockKind, duration: Int, minimum: Int, split: Bool, windowStart: Date, windowEnd: Date, taskID: String? = nil, routineID: String? = nil, protected: Bool = false, personal: Bool = false) -> Int {
             guard duration > 0 else { return 0 }
             var remaining = duration
             let effectiveMin = max(5, minimum)
@@ -74,8 +78,9 @@ public struct Scheduler {
                 var found: PlanBlock?
                 // Try the longest useful chunk first, then reduce by the five-minute grid.
                 while amount >= effectiveMin && found == nil {
-                    var candidateStart = rounded(max(earliest, windowStart))
-                    let limit = min(end, windowEnd)
+                    let first = personal ? (sameDay ? max(personalStart, rounded(now)) : personalStart) : earliest
+                    var candidateStart = rounded(max(first, windowStart))
+                    let limit = min(personal ? personalEnd : end, windowEnd)
                     while candidateStart.addingTimeInterval(Double(amount * 60)) <= limit {
                         let candidateEnd = candidateStart.addingTimeInterval(Double(amount * 60))
                         while blocks.contains(where: { $0.id == "\(key)-\(id)-\(serial)" }) { serial += 1 }
@@ -88,7 +93,7 @@ public struct Scheduler {
                         let fitsAfter = after.map { candidateEnd.addingTimeInterval(Double(gap(candidate, $0, s: s) * 60)) <= $0.start } ?? true
                         if fitsBefore && fitsAfter {
                             let occupiedMinutes = occupied(ordered + transitions(ordered, start: start, end: end, s: s), start: start, end: end)
-                            if occupiedMinutes <= budget { found = candidate; break }
+                            if personal || occupiedMinutes <= budget { found = candidate; break }
                         }
                         candidateStart = candidateStart.addingTimeInterval(300)
                     }
@@ -123,12 +128,15 @@ public struct Scheduler {
             guard minutes > 0 else { continue }
             let reason: String?
             if task.quadrant == .reconsider { reason = "Q4 stays outside the automatic plan." }
+            else if TaskArea.from(task.tags) == .work && PlannerDate.calendar(s).isDateInWeekend(day) { reason = "Work tasks stay on working days. Change the tag to Personal for weekend planning." }
             else if task.dependencies.contains(where: { id in tasks.first(where: { $0.id == id })?.state != .done }) { reason = "Waiting for a prerequisite to finish." }
-            else if task.quadrant == .delegate && admin + minutes > s.adminBudget { reason = "Outside the \(s.adminBudget)-minute admin budget." }
+            else if task.area == .work && task.quadrant == .delegate && admin + minutes > s.adminBudget { reason = "Outside the \(s.adminBudget)-minute admin budget." }
             else { reason = nil }
             if let reason { omitted.append(.init(id: task.id, title: task.title, minutes: minutes, reason: reason)); continue }
-            let left = place(id: task.id, title: task.title, context: task.context, kind: .focus, duration: minutes, minimum: task.minimumBlockMinutes, split: task.allowsSplitting, windowStart: max(start, task.earliestStart ?? start), windowEnd: min(end, task.deadline ?? end), taskID: task.id)
-            if task.quadrant == .delegate { admin += minutes - left }
+            let window = s.taskWindow(task.area, on: day)
+            let taskStart = PlannerDate.at(window.start, on: day, settings: s), taskEnd = PlannerDate.at(window.end, on: day, settings: s)
+            let left = place(id: task.id, title: task.title, context: task.context, kind: .focus, duration: minutes, minimum: task.minimumBlockMinutes, split: task.allowsSplitting, windowStart: max(taskStart, task.earliestStart ?? taskStart), windowEnd: min(taskEnd, task.deadline ?? taskEnd), taskID: task.id, personal: task.area == .personal)
+            if task.area == .work && task.quadrant == .delegate { admin += minutes - left }
             if left > 0 {
                 omitted.append(.init(id: task.id, title: task.title, minutes: left, reason: task.deadline != nil ? "Deadline at risk: insufficient room before the deadline." : "No useful block fits after transitions and the interruption reserve."))
             }
@@ -145,11 +153,11 @@ public struct Scheduler {
             if available < 0 { warnings.append("Overlap: \(pair.0.title) and \(pair.1.title). Fixed times preserved.") }
             else if available < needed { warnings.append("Missing \(needed - available)-minute transition between \(pair.0.title) and \(pair.1.title).") }
         }
-        blocks += transitions(blocks, start: start, end: end, s: s)
-        return DayPlan(id: key, revision: (previous?.revision ?? 0) + 1, status: .draft, outcomeIDs: selectedOutcomes, selectedTaskIDs: selection.map { $0.sorted() }, publication: previous?.publication, blocks: (blocks + offDay).sorted(by: order), unscheduled: omitted, warnings: warnings, workMinutes: workMinutes, fixedMinutes: fixedMinutes, reserveMinutes: reserve, createdAt: now, previousBlocks: previous?.blocks)
+        blocks += transitions(blocks, start: visibleStart, end: visibleEnd, s: s)
+        return DayPlan(id: key, revision: (previous?.revision ?? 0) + 1, status: .draft, outcomeIDs: selectedOutcomes, selectedTaskIDs: selection.map { $0.sorted() }, publication: previous?.publication, blocks: (blocks + offDay).sorted(by: order), unscheduled: omitted, warnings: warnings, workMinutes: workMinutes, fixedMinutes: fixedMinutes, reserveMinutes: reserve, createdAt: now, previousBlocks: previous?.blocks, capacityStart: start, capacityEnd: end)
     }
     /// Rebuild only layout metadata after a calendar move; never place or move other work.
-    public func refreshingLayout(_ plan: DayPlan, settings s: PlanningSettings) -> DayPlan {
+    public func refreshingLayout(_ plan: DayPlan, settings s: PlanningSettings, tasks: [PlannerTask] = []) -> DayPlan {
         var result = plan
         let f = DateFormatter(); f.calendar = PlannerDate.calendar(s); f.timeZone = f.calendar.timeZone; f.dateFormat = "yyyy-MM-dd"
         guard let day = f.date(from: plan.id) else { return result }
@@ -157,7 +165,7 @@ public struct Scheduler {
         result.blocks.removeAll { $0.kind == .transition }
         let visible = result.blocks.filter { PlannerDate.key($0.start, settings: s) == plan.id }.sorted(by: order)
         result.warnings.removeAll { $0.hasPrefix("Overlap:") || $0.hasPrefix("Missing ") || $0.hasPrefix("Outside work hours:") }
-        for block in visible where (block.kind == .focus || block.kind == .routine) && (block.start < start || block.end > end) {
+        for block in visible where (block.kind == .focus || block.kind == .routine) && (block.start < start || block.end > end) && !tasks.contains(where: { $0.id == block.taskID && $0.area == .personal }) {
             result.warnings.append("Outside work hours: \(block.title). Calendar time preserved.")
         }
         for (a, b) in zip(visible, visible.dropFirst()) {
@@ -167,6 +175,7 @@ public struct Scheduler {
         }
         result.blocks += transitions(visible, start: start, end: end, s: s)
         result.blocks.sort(by: order)
+        result.capacityStart = start; result.capacityEnd = end
         result.workMinutes = max(0, Int(end.timeIntervalSince(start) / 60))
         let fixed = visible.filter { $0.kind == .meeting || $0.kind == .lunch }
         result.fixedMinutes = occupied(fixed + transitions(fixed, start: start, end: end, s: s), start: start, end: end)

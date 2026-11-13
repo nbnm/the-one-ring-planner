@@ -5,6 +5,8 @@ import RingCore
 struct MainView: View {
     @EnvironmentObject var store: PlannerStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.libraryDemoReduceMotion) private var demoReduceMotion
+    @State private var moreExpanded = false
     private var quadrantExpanded: Bool { store.page == .matrix && store.expandedQuadrant != nil }
     var body: some View {
         VStack(spacing: 0) {
@@ -14,29 +16,34 @@ struct MainView: View {
                 Rectangle().fill(Theme.line).frame(width: 1)
             }
             VStack(spacing: 0) {
+                if !quadrantExpanded { ShireLandscape().frame(height: 72).overlay(alignment: .bottom) { DividerLine() } }
                 Group {
                     switch store.page {
                     case .today: TodayView()
+                    case .inbox: InboxPage()
                     case .calendar: CalendarPage()
                     case .matrix: MatrixView()
                     case .routines: RoutinesView()
                     case .meetings: MeetingPage(meetings: store.meetings)
+                    case .library: LibraryPage(library: store.library)
                     case .review: ReviewView()
                     case .history: TaskHistoryView()
                     case .settings: PreferencesView()
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
-            if !quadrantExpanded && store.page != .meetings && store.page != .calendar {
+            if !quadrantExpanded && store.page != .meetings && store.page != .calendar && store.page != .inbox {
                 Rectangle().fill(Theme.line).frame(width: 1)
                 InboxSidebar().frame(width: 306)
             }
           }
           PlannerStatusBar(alerts: store.eventAlerts)
         }
-        .font(Theme.body()).foregroundStyle(Theme.text).background(Theme.background)
+        .transaction { if demoReduceMotion { $0.disablesAnimations = true } }
+        .tint(Theme.gold).font(Theme.body()).foregroundStyle(Theme.text).background(Theme.background)
         .frame(minWidth: 1160, minHeight: 700)
         .coordinateSpace(name: PlannerDragSpace.workspace)
+        .onPreferenceChange(LibraryDropRegionsKey.self) { store.libraryDropRegions = $0 }
         .onPreferenceChange(PriorityDropRegionsKey.self) { store.priorityDropRegions = $0 }
         .onChange(of: store.page) { _, page in
             store.taskDrag = nil
@@ -50,6 +57,7 @@ struct MainView: View {
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: store.taskCelebration?.id)
+        .sheet(item: Binding(get: { store.sharedInbox.selected }, set: { store.sharedInbox.selected = $0 })) { InboxItemReader(item: $0) }
         .sheet(item: $store.editingTask) { TaskEditor(task: $0) }
         .sheet(item: $store.priorityReview) { PriorityReviewSheet(request: $0) }
         .sheet(item: $store.captureReview) { CaptureReviewSheet(review: $0) }
@@ -65,9 +73,9 @@ struct MainView: View {
     }
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) { RingMark(size: 36); VStack(alignment: .leading, spacing: 4) { Text("THE ONE RING").font(Theme.body(10, weight: .bold)).tracking(1); Text("PLANNER").font(Theme.body(10, weight: .semibold)).tracking(2.2) }.fixedSize() }
+            HStack(spacing: 8) { RingMark(size: 36); VStack(alignment: .leading, spacing: 4) { Text("THE ONE RING").font(Theme.body(10, weight: .bold)).tracking(1); Text("PLANNER").font(Theme.body(10, weight: .semibold)).tracking(2.2) }.fixedSize() }.foregroundStyle(Theme.navigationText)
                 .padding(.top, 28).padding(.bottom, 36).padding(.horizontal, 19)
-            ForEach(PlannerStore.Page.allCases.filter { $0 != .settings }, id: \.self) { page in
+            ForEach(PlannerStore.Page.allCases.filter { $0 != .settings && (!store.compactNavigation || ![.routines, .review, .history].contains($0)) }, id: \.self) { page in
                 Button { store.page = page } label: {
                     HStack(spacing: 11) {
                         if page == .meetings { EyeMark().frame(width: 18, height: 18) }
@@ -75,13 +83,22 @@ struct MainView: View {
                         Text(page.rawValue).font(Theme.body(13, weight: store.page == page ? .semibold : .regular))
                         Spacer(minLength: 0)
                     }.padding(.horizontal, 14).padding(.vertical, 12)
-                        .foregroundStyle(store.page == page ? Theme.gold : Theme.secondary)
-                        .background(store.page == page ? Theme.goldFill : .clear, in: RoundedRectangle(cornerRadius: 7))
+                        .foregroundStyle(store.page == page ? Theme.navigationSelected : Theme.navigationText.opacity(0.78))
+                        .background(store.page == page ? Theme.navigationFill : .clear, in: Capsule())
                 }.buttonStyle(.plain).padding(.horizontal, 12).padding(.bottom, 3)
+                .background { if page == .library { GeometryReader { geo in Color.clear.preference(key: LibraryDropRegionsKey.self, value: [geo.frame(in: .named(PlannerDragSpace.workspace))]) } } }
+                .overlay { if page == .library && store.taskDrag.map({ drag in store.libraryDropRegions.contains { $0.contains(drag.location) } }) == true { Capsule().stroke(Theme.navigationSelected, lineWidth: 2).padding(.horizontal, 12) } }
+            }
+            if store.compactNavigation {
+                DisclosureGroup("More", isExpanded: $moreExpanded) {
+                    ForEach([PlannerStore.Page.routines, .review, .history], id: \.self) { page in
+                        Button { store.page = page } label: { Label(page.rawValue, systemImage: page.icon).font(Theme.body(13)).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 9).foregroundStyle(store.page == page ? Theme.navigationSelected : Theme.navigationText.opacity(0.78)) }.buttonStyle(.plain)
+                    }
+                }.font(Theme.body(13)).foregroundStyle(Theme.navigationText.opacity(0.78)).tint(Theme.navigationText).padding(.horizontal, 25).padding(.top, 10)
             }
             Spacer()
-            Button { AppActions.capture() } label: { Label("Capture", systemImage: "plus").font(Theme.body(13)).foregroundStyle(Theme.secondary).padding(.horizontal, 24).padding(.vertical, 12) }.buttonStyle(.plain).help("Quick capture · Control Option Space")
-            Button { store.page = .settings } label: { Label("Settings", systemImage: "slider.horizontal.3").font(Theme.body(13)).foregroundStyle(Theme.secondary).padding(24) }.buttonStyle(.plain)
+            Button { AppActions.capture() } label: { Label("Capture", systemImage: "plus").font(Theme.body(13)).foregroundStyle(Theme.navigationText.opacity(0.78)).padding(.horizontal, 24).padding(.vertical, 12) }.buttonStyle(.plain).help("Quick capture · Control Option Space")
+            Button { store.page = .settings } label: { Label("Settings", systemImage: "slider.horizontal.3").font(Theme.body(13)).foregroundStyle(Theme.navigationText.opacity(0.78)).padding(24) }.buttonStyle(.plain)
         }.background(Theme.sidebar)
     }
 }
@@ -168,7 +185,7 @@ struct TodayView: View {
                     Button("Build automatically") { store.generate() }.buttonStyle(.plain).font(Theme.body(11)).foregroundStyle(Theme.gold)
                 }
             }.padding(.top, 6)
-            if !store.inbox.isEmpty { Button("Prioritize your inbox →") { store.page = .matrix }.buttonStyle(.plain).foregroundStyle(Theme.gold) }
+            if !store.inbox.isEmpty || !store.sharedInbox.active.isEmpty { Button("Review your Inbox →") { store.page = .inbox }.buttonStyle(.plain).foregroundStyle(Theme.gold) }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }

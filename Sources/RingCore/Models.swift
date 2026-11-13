@@ -10,12 +10,13 @@ public enum Quadrant: Int, Codable, CaseIterable, Identifiable {
 }
 
 public struct PlannerTask: Codable, Identifiable, Equatable, Sendable {
-    public var schemaVersion = 3
+    public var schemaVersion = 4
     public var id: String
     public var title: String
     public var context: String
     public var notes: String
     public var tags: [String]
+    public var attachments: [LibraryAttachment] = []
     public var sourceCaptureID: String?
     public var createdAt: Date
     public var updatedAt: Date
@@ -45,16 +46,17 @@ public struct PlannerTask: Codable, Identifiable, Equatable, Sendable {
         self.minimumBlockMinutes = 25; self.allowsSplitting = true; self.dependencies = []; self.resumeNote = ""
     }
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, id, title, context, notes, tags, sourceCaptureID, createdAt, updatedAt, revision, state
+        case schemaVersion, id, title, context, notes, tags, attachments, sourceCaptureID, createdAt, updatedAt, revision, state
         case importance, urgency, remainingMinutes, minimumBlockMinutes, allowsSplitting, deadline, earliestStart, dependencies, resumeNote, completedAt, completionID
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        schemaVersion = max(3, try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1)
+        schemaVersion = max(4, try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1)
         id = try c.decode(String.self, forKey: .id); title = try c.decode(String.self, forKey: .title)
         context = try c.decode(String.self, forKey: .context)
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         tags = TaskTags.normalize(try c.decodeIfPresent([String].self, forKey: .tags) ?? [])
+        attachments = try c.decodeIfPresent([LibraryAttachment].self, forKey: .attachments) ?? []
         sourceCaptureID = try c.decodeIfPresent(String.self, forKey: .sourceCaptureID)
         createdAt = try c.decode(Date.self, forKey: .createdAt); updatedAt = try c.decode(Date.self, forKey: .updatedAt)
         revision = try c.decode(Int.self, forKey: .revision); state = try c.decode(TaskState.self, forKey: .state)
@@ -70,6 +72,7 @@ public struct PlannerTask: Codable, Identifiable, Equatable, Sendable {
 }
 
 public struct Capture: Codable, Identifiable, Equatable, Sendable {
+    public var attachments: [LibraryAttachment]?
     public var schemaVersion = 1
     public var id: String
     public var text: String
@@ -130,6 +133,14 @@ public struct Routine: Codable, Identifiable, Equatable {
     ]
 }
 
+public struct PersonalAvailability: Codable, Equatable, Sendable {
+    public var weekdayStart = 1080
+    public var weekdayEnd = 1260
+    public var weekendStart = 600
+    public var weekendEnd = 1200
+    public init() {}
+    public var isValid: Bool { [weekdayStart, weekendStart].allSatisfy { $0 >= 0 } && weekdayEnd <= 1440 && weekendEnd <= 1440 && weekdayStart < weekdayEnd && weekendStart < weekendEnd }
+}
 public struct PlanningSettings: Codable, Equatable {
     public var schemaVersion = 1
     public var timeZone = "America/Toronto"
@@ -147,9 +158,10 @@ public struct PlanningSettings: Codable, Equatable {
     public var adminBudget = 30
     public var freezeMinutes = 15
     public var speechLocale = "en-US"
+    public var personalAvailability: PersonalAvailability? = nil
     public init() {}
     public var isValid: Bool {
-        TimeZone(identifier: timeZone) != nil && workStart >= 0 && workEnd <= 1440 && workEnd > workStart && lunchMinutes >= 0 && lunchStart >= workStart && lunchStart + lunchMinutes <= workEnd && reservePercent >= 0 && reservePercent <= 50 && focusMinutes >= 15 && minimumFocusMinutes >= 5 && minimumFocusMinutes <= focusMinutes
+        (personalAvailability?.isValid ?? true) && TimeZone(identifier: timeZone) != nil && workStart >= 0 && workEnd <= 1440 && workEnd > workStart && lunchMinutes >= 0 && lunchStart >= workStart && lunchStart + lunchMinutes <= workEnd && reservePercent >= 0 && reservePercent <= 50 && focusMinutes >= 15 && minimumFocusMinutes >= 5 && minimumFocusMinutes <= focusMinutes
     }
 }
 
@@ -204,7 +216,18 @@ public struct DayPlan: Codable, Identifiable, Equatable {
     public var previousBlocks: [PlanBlock]?
     public var plannedMinutes: Int { blocks.filter { $0.kind == .focus || $0.kind == .routine }.reduce(0) { $0 + $1.minutes } }
     public var completedMinutes: Int { blocks.filter { $0.state == .completed }.reduce(0) { $0 + ($1.actualMinutes ?? $1.minutes) } }
-    public var freeMinutes: Int { max(0, workMinutes - blocks.reduce(0) { $0 + $1.minutes }) }
+    public var capacityStart: Date? = nil
+    public var capacityEnd: Date? = nil
+    public var freeMinutes: Int {
+        guard let start = capacityStart, let end = capacityEnd else { return max(0, workMinutes - blocks.reduce(0) { $0 + $1.minutes }) }
+        var used: [(Date, Date)] = []
+        for block in blocks.sorted(by: { $0.start < $1.start }) {
+            let a = max(start, block.start), b = min(end, block.end)
+            guard a < b else { continue }
+            if let last = used.last, a <= last.1 { used[used.count - 1].1 = max(last.1, b) } else { used.append((a, b)) }
+        }
+        return max(0, workMinutes - used.reduce(0) { $0 + Int($1.1.timeIntervalSince($1.0) / 60) })
+    }
 }
 
 public enum PlannerDate {

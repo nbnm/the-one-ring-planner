@@ -53,8 +53,8 @@ struct TaskTagEditor: View {
                 }
             }
             HStack(spacing: 8) {
-                TextField("Project / product tag", text: $entry).textFieldStyle(.roundedBorder).onSubmit(add).accessibilityLabel("New project or product tag")
-                Button(action: add) { Image(systemName: "plus") }.buttonStyle(.plain).disabled(entry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || entry.count > 60).accessibilityLabel("Add project or product tag")
+                TextField("Project / topic tag", text: $entry).textFieldStyle(.roundedBorder).onSubmit(add).accessibilityLabel("New project or topic tag")
+                Button(action: add) { Image(systemName: "plus") }.buttonStyle(.plain).disabled(entry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || entry.count > 60).accessibilityLabel("Add project or topic tag")
                 if !knownTags.isEmpty {
                     Menu("Existing tags") { ForEach(knownTags.filter { !tags.contains($0) }, id: \.self) { tag in Button(tag) { tags = TaskTags.normalize(tags + [tag], known: knownTags) } } }.fixedSize().font(Theme.body(11))
                 }
@@ -75,16 +75,18 @@ struct TaskTagControls: View {
     var body: some View {
         HStack(spacing: 10) {
             Picker("Filter tasks by tag", selection: $filter) {
-                Text("All tags").tag(TaskTagFilter.all)
+                Text("All tasks").tag(TaskTagFilter.all)
+                Text("Work").tag(TaskTagFilter.tag("Work"))
+                Text("Personal").tag(TaskTagFilter.tag("Personal"))
                 Text("Untagged").tag(TaskTagFilter.untagged)
-                ForEach(tags, id: \.self) { Text($0).tag(TaskTagFilter.tag($0)) }
+                ForEach(tags.filter { TaskArea.from([$0]) == nil }, id: \.self) { Text($0).tag(TaskTagFilter.tag($0)) }
             }.labelsHidden().frame(maxWidth: 180).accessibilityLabel("Filter tasks by tag")
             Spacer(minLength: 0)
             Toggle(isOn: $grouped) { Image(systemName: "rectangle.3.group").font(.system(size: 12)) }.toggleStyle(.button)
-                .help("Group by first project/product tag").accessibilityLabel("Group tasks by tag")
+                .help("Group by first project or topic tag").accessibilityLabel("Group tasks by tag")
         }.font(Theme.body(11))
             .onChange(of: tags) { _, values in
-                if case .tag(let name) = filter, !values.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) { filter = .all }
+                if case .tag(let name) = filter, TaskArea.from([name]) == nil, !values.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) { filter = .all }
             }
     }
 }
@@ -95,5 +97,14 @@ struct TagGroupHeading: View {
         if let title = group.title {
             HStack { Text(title).font(Theme.body(11, weight: .semibold)); Spacer(); Text("\(group.tasks.count)").font(Theme.body(10)).monospacedDigit() }.foregroundStyle(Theme.secondary).padding(.top, 16).padding(.bottom, 4)
         }
+    }
+}
+
+struct TaskAreaPicker: View {
+    @Binding var tags: [String]
+    var body: some View {
+        Picker("Schedule", selection: Binding(get: { TaskArea.from(tags) ?? .work }, set: { tags = $0.applying(to: tags) })) {
+            ForEach(TaskArea.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        }.pickerStyle(.segmented).accessibilityLabel("Work or Personal task")
     }
 }
